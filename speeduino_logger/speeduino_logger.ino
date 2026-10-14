@@ -10,29 +10,54 @@
   2) Nenhum cliente conectado:
        - o ESP32 pergunta sozinho à ECU (comando 'n') a POLL_HZ Hz e grava no SD
 
-  ARQUIVO DE LOG (/log_NNNN.csv) - abre direto no MegaLogViewer / Excel
-  ---------------------------------------------------------------------
-  Uma linha de cabeçalho com os nomes dos canais e uma linha por amostra:
-     time_s,src,secl,status1,...
-     src = poll  -> veio do polling do ESP32
-     src = sniff -> veio da escuta da conversa cliente<->ECU
-  time_s = segundos desde que o ESP32 foi ligado.
-  Os offsets seguem a lista de dados em tempo real da wiki da Speeduino; confirme as escalas
-  (principalmente PW, TPS e AFR) com o speeduino.ini da SUA versão e ajuste a tabela CH[] abaixo.
+  TIMESTAMP E ORGANIZACAO DOS LOGS
+  --------------------------------
+  - Os logs usam a hora real de um RTC DS3231 via I2C.
+  - Cada dia gera uma pasta: /YYYY-MM-DD/
+  - Dentro da pasta, o arquivo eh nomeado com o momento de inicio da gravacao:
+      YYYY-MM-DDTHH-MM-SS.csv
+  - Cada arquivo tem no maximo MAX_LOG_SIZE_BYTES (10 MB). Ao atingir o limite,
+    um novo arquivo eh criado.
+  - Antes de criar um novo log, se o espaco livre no SD for menor que
+    SD_FREE_MARGIN_MB (100 MB), o log mais antigo eh removido automaticamente.
+  - Se o RTC falhar, o logger continua gravando na pasta fallback /NO_RTC/.
 
-  LIGAÇÃO (ESP32 clássico, NÃO serve S2/S3/C3 por causa do Bluetooth clássico)
-  ---------------------------------------------------------------------------
+  ARQUIVO DE LOG - abre direto no MegaLogViewer / Excel
+  -----------------------------------------------------
+  Uma linha de cabecalho com os nomes dos canais e uma linha por amostra:
+     datetime,time_s,src,secl,status1,...
+     datetime = data/hora real do RTC (ISO 8601)
+     time_s   = segundos desde que o ESP32 foi ligado
+     src      = poll  -> veio do polling do ESP32
+              = sniff -> veio da escuta da conversa cliente<->ECU
+
+  Os offsets seguem a lista de dados em tempo real da wiki da Speeduino; confirme
+  as escalas (principalmente PW, TPS e AFR) com o speeduino.ini da SUA versao e
+  ajuste a tabela CH[] abaixo.
+
+  LIGACAO (ESP32 classico, NAO serve S2/S3/C3 por causa do Bluetooth classico)
+  ----------------------------------------------------------------------------
   Speeduino TX (5V) --[divisor 5V->3V3]--> GPIO16 (RX2)
   Speeduino RX      <------------------   GPIO17 (TX2)    (3V3 basta)
   GND <-> GND ; 5V da placa Speeduino (pino VCC do conector do HC-06) -> VIN do ESP32
-  Módulo micro SD (3V3, sem conversor de nível): 3V3, GND, CS=GPIO5, MOSI=GPIO23, CLK=GPIO18, MISO=GPIO19
 
-  COMPILAÇÃO: placa "ESP32 Dev Module", Partition Scheme "Huge APP" (o BluetoothSerial é grande).
+  DS3231 RTC:
+    VCC -> 3V3
+    GND -> GND
+    SDA -> GPIO21
+    SCL -> GPIO22
+
+  Modulo micro SD (3V3, sem conversor de nivel):
+    3V3, GND, CS=GPIO5, MOSI=GPIO23, CLK=GPIO18, MISO=GPIO19
+
+  COMPILACAO: placa "ESP32 Dev Module", Partition Scheme "Huge APP" (o BluetoothSerial eh grande).
 */
 
 #include <Arduino.h>
 #include <SPI.h>
 #include <SD.h>
+#include <Wire.h>
+#include <RTClib.h>
 
 #define USE_WIFI 1   // 0 = Bluetooth SPP, 1 = Wi-Fi AP + servidor TCP (porta 2000)
 
@@ -45,7 +70,7 @@
   BluetoothSerial SerialBT;
 #endif
 
-// ----------------------------- CONFIGURAÇÃO -----------------------------
+// ----------------------------- CONFIGURACAO ------------------------------
 static const uint32_t ECU_BAUD        = 115200;
 static const int      ECU_RX_PIN      = 16;
 static const int      ECU_TX_PIN      = 17;
@@ -56,13 +81,19 @@ static const int      SD_MISO_PIN     = 19;
 static const int      SD_MOSI_PIN     = 23;
 static const uint32_t SD_SPI_HZ       = 10000000;
 
-static const uint32_t POLL_HZ         = 30;                 // taxa do modo autônomo
+static const int      RTC_SDA_PIN     = 21;
+static const int      RTC_SCL_PIN     = 22;
+
+static const uint32_t POLL_HZ         = 30;                 // taxa do modo autonomo
 static const uint32_t POLL_PERIOD_MS  = 1000 / POLL_HZ;
 static const uint32_t FLUSH_MS        = 1000;               // flush no SD (corte de energia ao desligar o carro)
 
-// Bytes que a ECU antepõe à resposta do comando 'r' (0x30):
-//   0 = porta principal (protocolo do TunerStudio, sem cabeçalho)
-//   2 = porta secundária (Serial3): responde 'r' + 0x30 antes dos dados
+static const uint32_t MAX_LOG_SIZE_BYTES = 10UL * 1024 * 1024;  // 10 MB por arquivo
+static const uint32_t SD_FREE_MARGIN_MB  = 100;                 // mantem 100 MB livres no SD
+
+// Bytes que a ECU antepoe a resposta do comando 'r' (0x30):
+//   0 = porta principal (protocolo do TunerStudio, sem cabecalho)
+//   2 = porta secundaria (Serial3): responde 'r' + 0x30 antes dos dados
 // VERIFICAR no seu hardware com SNIFF_DEBUG = 1.
 static const uint8_t  R_REPLY_HEADER  = 0;
 
@@ -76,7 +107,7 @@ static const size_t   MAX_FRAME       = 250;
 enum Typ : uint8_t { U8, I8, U16, I16 };
 struct Chan {
   const char* name;
-  uint8_t     off;     // posição no pacote de tempo real
+  uint8_t     off;     // posicao no pacote de tempo real
   Typ         typ;
   float       scale;
   int16_t     add;
@@ -131,6 +162,29 @@ static Stream& link() { return SerialBT; }
 static bool linkConnected() { return SerialBT.hasClient(); }
 #endif
 
+// ------------------------------- RTC -------------------------------------
+RTC_DS3231 rtc;
+static bool rtcOk = false;
+
+static void formatDateTime(const DateTime& dt, char* out, size_t len) {
+  snprintf(out, len, "%04d-%02d-%02dT%02d:%02d:%02d",
+           (int)dt.year(), (int)dt.month(), (int)dt.day(),
+           (int)dt.hour(), (int)dt.minute(), (int)dt.second());
+}
+
+static void dateFolderName(const DateTime& dt, char* out, size_t len) {
+  snprintf(out, len, "/%04d-%02d-%02d",
+           (int)dt.year(), (int)dt.month(), (int)dt.day());
+}
+
+static void fileNameFromDateTime(const DateTime& dt, char* out, size_t len) {
+  // Nome de arquivo no padrao ISO 8601 (dois-pontos substituidos por hifens)
+  snprintf(out, len, "%04d-%02d-%02dT%02d-%02d-%02d.csv",
+           (int)dt.year(), (int)dt.month(), (int)dt.day(),
+           (int)dt.hour(), (int)dt.minute(), (int)dt.second());
+}
+// -------------------------------------------------------------------------
+
 // ------------------------------- SD / LOG --------------------------------
 static File     logFile;
 static bool     sdOk = false;
@@ -138,22 +192,173 @@ static uint32_t lastFlush = 0;
 static uint32_t lastFrameMs = 0;
 static uint32_t lastSdTry = 0;
 
+static DateTime logStartDateTime;
+static char     currentFolder[16]  = "";
+static char     currentFileName[32] = "";
+
+static uint64_t sdFreeBytes() {
+  return SD.totalBytes() - SD.usedBytes();
+}
+
+static uint32_t sdFreeMB() {
+  return (uint32_t)(sdFreeBytes() / (1024ULL * 1024ULL));
+}
+
+static bool isDateFolderName(const char* name) {
+  // Formato esperado: YYYY-MM-DD (10 caracteres), com ou sem barra inicial
+  if (name[0] == '/') name++;
+  size_t len = strlen(name);
+  if (len != 10) return false;
+  for (size_t i = 0; i < 10; i++) {
+    if (i == 4 || i == 7) {
+      if (name[i] != '-') return false;
+    } else {
+      if (name[i] < '0' || name[i] > '9') return false;
+    }
+  }
+  return true;
+}
+
+static void removeFolderIfEmpty(const char* path) {
+  File folder = SD.open(path);
+  if (!folder || !folder.isDirectory()) return;
+  File entry = folder.openNextFile();
+  bool empty = (entry == false);
+  if (entry) entry.close();
+  folder.close();
+  if (empty) {
+    SD.rmdir(path);
+  }
+}
+
+// Encontra o arquivo de log .csv mais antigo dentro das pastas diarias.
+// Retorna true se encontrou e preenche outPath com o caminho completo.
+static bool findOldestLog(char* outPath, size_t len) {
+  File root = SD.open("/");
+  if (!root) return false;
+
+  bool found = false;
+  char oldest[64] = "";
+
+  File folder = root.openNextFile();
+  while (folder) {
+    if (folder.isDirectory()) {
+      const char* folderName = folder.name();
+      if (isDateFolderName(folderName)) {
+        File f = folder.openNextFile();
+        while (f) {
+          if (!f.isDirectory()) {
+            const char* n = f.name();
+            size_t nlen = strlen(n);
+            if (nlen > 4 && strcmp(n + nlen - 4, ".csv") == 0) {
+              const char* fn = folderName;
+              if (fn[0] == '/') fn++;
+              char fullPath[64];
+              snprintf(fullPath, sizeof(fullPath), "/%s/%s", fn, n);
+              if (!found || strcmp(fullPath, oldest) < 0) {
+                found = true;
+                strncpy(oldest, fullPath, sizeof(oldest) - 1);
+                oldest[sizeof(oldest) - 1] = '\0';
+              }
+            }
+          }
+          f = folder.openNextFile();
+        }
+      }
+    }
+    folder.close();
+    folder = root.openNextFile();
+  }
+  root.close();
+
+  if (found) {
+    strncpy(outPath, oldest, len - 1);
+    outPath[len - 1] = '\0';
+  }
+  return found;
+}
+
+// Remove logs antigos ate liberar SD_FREE_MARGIN_MB.
+static bool ensureSpaceAvailable() {
+  while (sdFreeMB() < SD_FREE_MARGIN_MB) {
+    char oldest[64];
+    if (!findOldestLog(oldest, sizeof(oldest))) {
+      Serial.println("SD cheio e nenhum log antigo para remover");
+      return false;
+    }
+
+    // Extrai o nome da pasta para verificar se ficara vazia depois.
+    char folder[16] = "";
+    const char* slash = strchr(oldest + 1, '/');
+    if (slash) {
+      size_t flen = slash - oldest;
+      if (flen < sizeof(folder)) {
+        strncpy(folder, oldest, flen);
+        folder[flen] = '\0';
+      }
+    }
+
+    Serial.printf("Removendo log antigo: %s\n", oldest);
+    if (!SD.remove(oldest)) {
+      Serial.printf("Falha ao remover %s\n", oldest);
+      return false;
+    }
+
+    if (folder[0]) {
+      removeFolderIfEmpty(folder);
+    }
+  }
+  return true;
+}
+
 static bool openLog() {
   SPI.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
   if (!SD.begin(SD_CS_PIN, SPI, SD_SPI_HZ)) return false;
-  char name[24];
-  for (int i = 1; i < 10000; i++) {
-    snprintf(name, sizeof(name), "/log_%04d.csv", i);
-    if (!SD.exists(name)) break;
+
+  if (!ensureSpaceAvailable()) {
+    Serial.println("SD sem espaco disponivel");
+    return false;
   }
-  logFile = SD.open(name, FILE_WRITE);
+
+  DateTime now;
+  char folder[16];
+  char fileName[32];
+  char fullPath[48];
+
+  if (rtcOk) {
+    now = rtc.now();
+    dateFolderName(now, folder, sizeof(folder));
+    fileNameFromDateTime(now, fileName, sizeof(fileName));
+  } else {
+    // Fallback: pasta NO_RTC, nome baseado no tempo desde o boot
+    strcpy(folder, "/NO_RTC");
+    snprintf(fileName, sizeof(fileName), "BOOT_%010lu.csv", (unsigned long)millis());
+  }
+
+  if (!SD.exists(folder)) {
+    if (!SD.mkdir(folder)) return false;
+  }
+
+  snprintf(fullPath, sizeof(fullPath), "%s/%s", folder, fileName);
+
+  logFile = SD.open(fullPath, FILE_WRITE);
   if (!logFile) return false;
 
-  logFile.print("time_s,src");
+  logFile.print("datetime,time_s,src");
   for (size_t i = 0; i < NCH; i++) { logFile.print(','); logFile.print(CH[i].name); }
   logFile.print('\n');
   logFile.flush();
-  Serial.printf("Log: %s\n", name);
+
+  if (rtcOk) {
+    logStartDateTime = now;
+  }
+
+  strncpy(currentFolder, folder, sizeof(currentFolder) - 1);
+  currentFolder[sizeof(currentFolder) - 1] = '\0';
+  strncpy(currentFileName, fileName, sizeof(currentFileName) - 1);
+  currentFileName[sizeof(currentFileName) - 1] = '\0';
+
+  Serial.printf("Log: %s\n", fullPath);
   return true;
 }
 
@@ -163,10 +368,29 @@ static void logFrame(uint8_t src, const uint8_t* p, uint8_t n) {
   if (!sdOk) return;
   uint32_t t = lastFrameMs;
 
-  char line[640];
-  size_t pos = snprintf(line, sizeof(line), "%lu.%03lu,%s",
-                        (unsigned long)(t / 1000), (unsigned long)(t % 1000),
-                        src == 0 ? "poll" : "sniff");
+  DateTime now;
+  bool haveRtcNow = false;
+  if (rtcOk) {
+    now = rtc.now();
+    haveRtcNow = true;
+  }
+
+  char line[720];
+  size_t pos;
+
+  if (haveRtcNow) {
+    char dt[24];
+    formatDateTime(now, dt, sizeof(dt));
+    pos = snprintf(line, sizeof(line), "%s,%lu.%03lu,%s",
+                   dt,
+                   (unsigned long)(t / 1000), (unsigned long)(t % 1000),
+                   src == 0 ? "poll" : "sniff");
+  } else {
+    // Fallback: datetime fica vazio, time_s continua funcionando
+    pos = snprintf(line, sizeof(line), ",%lu.%03lu,%s",
+                   (unsigned long)(t / 1000), (unsigned long)(t % 1000),
+                   src == 0 ? "poll" : "sniff");
+  }
 
   for (size_t i = 0; i < NCH && pos < sizeof(line) - 24; i++) {
     const Chan& c = CH[i];
@@ -186,12 +410,29 @@ static void logFrame(uint8_t src, const uint8_t* p, uint8_t n) {
   line[pos++] = '\n';
 
   if (logFile.write((const uint8_t*)line, pos) != pos) {
-    sdOk = false;               // cartão removido / erro: tenta reabrir depois
+    sdOk = false;               // cartao removido / erro: tenta reabrir depois
     logFile.close();
     return;
   }
   if (t - lastFlush >= FLUSH_MS) { logFile.flush(); lastFlush = t; }
+
+  // Verifica se precisa rotacionar o arquivo (tamanho ou mudanca de dia)
+  bool rotate = (logFile.size() >= MAX_LOG_SIZE_BYTES);
+  if (haveRtcNow) {
+    if (now.year() != logStartDateTime.year() ||
+        now.month() != logStartDateTime.month() ||
+        now.day() != logStartDateTime.day()) {
+      rotate = true;
+    }
+  }
+
+  if (rotate) {
+    logFile.flush();
+    logFile.close();
+    sdOk = openLog();
+  }
 }
+// -------------------------------------------------------------------------
 
 // ---------------------------- MODO 2: POLLING ----------------------------
 static uint8_t frame[MAX_FRAME + 4];
@@ -211,8 +452,8 @@ static bool readExact(uint8_t* b, size_t n, uint32_t timeoutMs) {
   return true;
 }
 
-// Envia 'n' e lê: 'n' | tipo(0x32) | tamanho | dados[tamanho]
-// O tamanho vem no cabeçalho, então funciona mesmo que a versão do firmware mude o pacote.
+// Envia 'n' e le: 'n' | tipo(0x32) | tamanho | dados[tamanho]
+// O tamanho vem no cabecalho, entao funciona mesmo que a versao do firmware mude o pacote.
 static bool pollOnce() {
   while (ECU.available()) ECU.read();
   ECU.write('n');
@@ -238,7 +479,7 @@ static void pollStep() {
 struct Pending {
   bool     active = false;
   char     kind = 0;        // 'n' ou 'r'
-  uint16_t len = 0;         // só para 'r'
+  uint16_t len = 0;         // so para 'r'
   uint16_t expect = 0;      // bytes totais esperados da resposta
   uint16_t got = 0;
   uint32_t t = 0;
@@ -250,9 +491,9 @@ static uint8_t  cbuf[16];
 static uint8_t  clen = 0;
 static uint32_t lastClientByteMs = 0;
 
-// Classifica o que o cliente mandou. Só interessam:
+// Classifica o que o cliente mandou. So interessam:
 //   'n'                                  -> dados em tempo real (formato novo, auto-descritivo)
-//   'r' canId 0x30 offLo offHi lenLo lenHi -> o que o TunerStudio usa (só offset 0)
+//   'r' canId 0x30 offLo offHi lenLo lenHi -> o que o TunerStudio usa (so offset 0)
 static void onClientBytes(const uint8_t* p, size_t n) {
   uint32_t now = millis();
   if (now - lastClientByteMs > 5) clen = 0;      // lacuna entre comandos
@@ -276,7 +517,7 @@ static void onClientBytes(const uint8_t* p, size_t n) {
         clen = 0;
       }
     } else {
-      pend.active = false;       // qualquer outro comando: não é dado em tempo real
+      pend.active = false;       // qualquer outro comando: nao eh dado em tempo real
       clen = 0;
     }
   }
@@ -328,11 +569,11 @@ static void bridgeStep() {
     onEcuBytes(buf, n);
     idle = false;
   }
-  if (pend.active && millis() - pend.t > 150) pend.active = false;   // resposta não veio
+  if (pend.active && millis() - pend.t > 150) pend.active = false;   // resposta nao veio
   if (idle) delay(1);
 }
 
-// ------------------------------ TRANSIÇÕES -------------------------------
+// ------------------------------ TRANSICOES -------------------------------
 static void drainEcu(uint32_t ms) {
   uint32_t t = millis();
   while (millis() - t < ms) { while (ECU.available()) ECU.read(); }
@@ -348,13 +589,34 @@ static void onModeChange(bool connected) {
 static void ledStep() {
   static uint32_t t = 0;
   static bool s = false;
-  uint32_t period = !sdOk ? 100 : ((millis() - lastFrameMs < 1000) ? 500 : 1500);
+  uint32_t period;
+  if (!sdOk) {
+    period = 100;                       // SD com erro: pisca rapido
+  } else if (!rtcOk) {
+    period = 200;                       // RTC com erro: pisca bem rapido
+  } else if (millis() - lastFrameMs < 1000) {
+    period = 500;                       // logando normalmente
+  } else {
+    period = 1500;                      // aguardando
+  }
   if (millis() - t >= period) { t = millis(); s = !s; digitalWrite(LED_PIN, s); }
 }
 
 void setup() {
   Serial.begin(115200);
   pinMode(LED_PIN, OUTPUT);
+
+  Wire.begin(RTC_SDA_PIN, RTC_SCL_PIN);
+  rtcOk = rtc.begin();
+  if (!rtcOk) {
+    Serial.println("RTC indisponivel (gravando em /NO_RTC)");
+  } else if (rtc.lostPower()) {
+    Serial.println("RTC perdeu a alimentacao. Ajuste a hora com set_rtc_time.ino");
+  } else {
+    char iso[24];
+    formatDateTime(rtc.now(), iso, sizeof(iso));
+    Serial.printf("RTC OK: %s\n", iso);
+  }
 
   ECU.setRxBufferSize(4096);          // aguenta uma escrita lenta no SD sem perder bytes
   ECU.begin(ECU_BAUD, SERIAL_8N1, ECU_RX_PIN, ECU_TX_PIN);
