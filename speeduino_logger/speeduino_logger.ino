@@ -15,6 +15,15 @@
   Com USE_WIFI = 1, o ESP32 tambem disponibiliza uma pagina em http://192.168.4.1/
   para listar e baixar os arquivos CSV do cartao SD diretamente pelo navegador.
 
+  ARQUITETURA FREERTOS
+  --------------------
+  A comunicacao com a ECU e a gravacao no SD rodam em tasks separadas,
+  comunicando por uma fila (queue) de frames brutos. Isso evita que picos de
+  latencia do cartao SD atrasem o polling da ECU.
+  - ecuTask (Core 0): polling/bridge + sniffer. Envia frames para a fila.
+  - sdTask  (Core 1): consome a fila, formata CSV e grava no SD.
+  - loop()  (Core 1): LED e servidor web.
+
   TIMESTAMP E ORGANIZACAO DOS LOGS
   --------------------------------
   - Os logs usam a hora real de um RTC DS3231 via I2C.
@@ -63,6 +72,10 @@
 #include <SD.h>
 #include <Wire.h>
 #include <RTClib.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/queue.h>
+#include <freertos/semphr.h>
 
 #define USE_WIFI 1   // 0 = Bluetooth SPP, 1 = Wi-Fi AP + servidor TCP (porta 2000)
 
@@ -108,6 +121,23 @@ static const uint8_t  R_REPLY_HEADER  = 0;
 
 static const int      LED_PIN         = 2;
 static const size_t   MAX_FRAME       = 250;
+
+// --------------------------- FREERTOS / FILA -----------------------------
+// Frame bruto recebido da ECU, colocado na fila pela task de comunicacao
+// e consumido pela task de escrita no SD.
+struct LogFrame {
+  uint32_t ms;                // millis() quando o frame chegou
+  uint8_t  src;               // 0 = poll, 1 = sniff
+  uint8_t  len;               // tamanho util do frame
+  uint8_t  data[MAX_FRAME];   // dados brutos
+};
+
+static const uint16_t FRAME_QUEUE_SIZE = 128;   // ~32 KB de RAM
+
+static QueueHandle_t  frameQueue = NULL;
+static SemaphoreHandle_t sdMutex = NULL;
+static TaskHandle_t   ecuTaskHandle = NULL;
+static TaskHandle_t   sdTaskHandle  = NULL;
 // -------------------------------------------------------------------------
 
 // ------------------------- CANAIS GRAVADOS NO CSV ------------------------
@@ -196,7 +226,7 @@ static void fileNameFromDateTime(const DateTime& dt, char* out, size_t len) {
 static File     logFile;
 static bool     sdOk = false;
 static uint32_t lastFlush = 0;
-static uint32_t lastFrameMs = 0;
+static volatile uint32_t lastFrameMs = 0;
 static uint32_t lastSdTry = 0;
 
 static DateTime logStartDateTime;
@@ -369,11 +399,36 @@ static bool openLog() {
   return true;
 }
 
-// Converte um pacote de tempo real em uma linha de CSV e grava no SD.
-static void logFrame(uint8_t src, const uint8_t* p, uint8_t n) {
-  lastFrameMs = millis();
-  if (!sdOk) return;
-  uint32_t t = lastFrameMs;
+// Coloca um frame bruto da ECU na fila para a task de SD gravar.
+// Chamada pela task de comunicacao (ecuTask).
+static void enqueueFrame(uint8_t src, const uint8_t* p, uint8_t n) {
+  if (n == 0 || n > MAX_FRAME) return;
+
+  LogFrame frame;
+  frame.ms  = millis();
+  frame.src = src;
+  frame.len = n;
+  memcpy(frame.data, p, n);
+
+  // Envia para a fila. Se a fila estiver cheia, espera (portMAX_DELAY).
+  // Isso faz o polling naturalmente atrasar quando o SD nao acompanha,
+  // preservando todos os frames em vez de descartar.
+  xQueueSend(frameQueue, &frame, portMAX_DELAY);
+
+  lastFrameMs = frame.ms;
+}
+
+// Converte um frame em linha de CSV e grava no SD.
+// Chamada pela task de escrita no SD (sdTask).
+static void writeFrameToSd(const LogFrame& frame) {
+  if (xSemaphoreTake(sdMutex, portMAX_DELAY) != pdTRUE) return;
+
+  if (!sdOk) {
+    xSemaphoreGive(sdMutex);
+    return;
+  }
+
+  uint32_t t = frame.ms;
 
   DateTime now;
   bool haveRtcNow = false;
@@ -391,25 +446,25 @@ static void logFrame(uint8_t src, const uint8_t* p, uint8_t n) {
     pos = snprintf(line, sizeof(line), "%s,%lu.%03lu,%s",
                    dt,
                    (unsigned long)(t / 1000), (unsigned long)(t % 1000),
-                   src == 0 ? "poll" : "sniff");
+                   frame.src == 0 ? "poll" : "sniff");
   } else {
     // Fallback: datetime fica vazio, time_s continua funcionando
     pos = snprintf(line, sizeof(line), ",%lu.%03lu,%s",
                    (unsigned long)(t / 1000), (unsigned long)(t % 1000),
-                   src == 0 ? "poll" : "sniff");
+                   frame.src == 0 ? "poll" : "sniff");
   }
 
   for (size_t i = 0; i < NCH && pos < sizeof(line) - 24; i++) {
     const Chan& c = CH[i];
     uint8_t size = (c.typ == U16 || c.typ == I16) ? 2 : 1;
-    if (c.off + size > n) { line[pos++] = ','; continue; }      // pacote curto: campo vazio
+    if (c.off + size > frame.len) { line[pos++] = ','; continue; }      // pacote curto: campo vazio
 
     int32_t raw;
     switch (c.typ) {
-      case U8:  raw = p[c.off]; break;
-      case I8:  raw = (int8_t)p[c.off]; break;
-      case U16: raw = (uint16_t)(p[c.off] | (p[c.off + 1] << 8)); break;
-      default:  raw = (int16_t)(p[c.off] | (p[c.off + 1] << 8)); break;
+      case U8:  raw = frame.data[c.off]; break;
+      case I8:  raw = (int8_t)frame.data[c.off]; break;
+      case U16: raw = (uint16_t)(frame.data[c.off] | (frame.data[c.off + 1] << 8)); break;
+      default:  raw = (int16_t)(frame.data[c.off] | (frame.data[c.off + 1] << 8)); break;
     }
     float v = raw * c.scale + c.add;
     pos += snprintf(line + pos, sizeof(line) - pos, ",%.*f", c.dec, v);
@@ -419,6 +474,7 @@ static void logFrame(uint8_t src, const uint8_t* p, uint8_t n) {
   if (logFile.write((const uint8_t*)line, pos) != pos) {
     sdOk = false;               // cartao removido / erro: tenta reabrir depois
     logFile.close();
+    xSemaphoreGive(sdMutex);
     return;
   }
   if (t - lastFlush >= FLUSH_MS) { logFile.flush(); lastFlush = t; }
@@ -438,6 +494,8 @@ static void logFrame(uint8_t src, const uint8_t* p, uint8_t n) {
     logFile.close();
     sdOk = openLog();
   }
+
+  xSemaphoreGive(sdMutex);
 }
 // -------------------------------------------------------------------------
 
@@ -445,6 +503,22 @@ static void logFrame(uint8_t src, const uint8_t* p, uint8_t n) {
 // Disponivel apenas no modo Wi-Fi. Permite listar e baixar os arquivos CSV
 // do cartao SD diretamente pelo navegador em http://192.168.4.1/
 #if USE_WIFI
+
+// Retorna o caminho do arquivo de log atualmente aberto, protegendo o acesso
+// as variaveis compartilhadas com a task de SD.
+static String currentLogPath() {
+  char folder[16] = "";
+  char file[32]   = "";
+  if (xSemaphoreTake(sdMutex, portMAX_DELAY) == pdTRUE) {
+    strncpy(folder, currentFolder, sizeof(folder) - 1);
+    folder[sizeof(folder) - 1] = '\0';
+    strncpy(file, currentFileName, sizeof(file) - 1);
+    file[sizeof(file) - 1] = '\0';
+    xSemaphoreGive(sdMutex);
+  }
+  if (folder[0] == '\0' || file[0] == '\0') return "";
+  return String(folder) + "/" + String(file);
+}
 
 static String htmlEscape(const String& s) {
   String r;
@@ -549,7 +623,7 @@ static void sendDirectoryListing() {
     return;
   }
 
-  String currentPath = String(currentFolder) + "/" + String(currentFileName);
+  String currentPath = currentLogPath();
   File entry = folder.openNextFile();
   while (entry) {
     String entryName = entry.name();
@@ -595,7 +669,7 @@ static void handleDownload() {
   }
 
   // Nao permite baixar o arquivo que ainda esta aberto para escrita.
-  String currentPath = String(currentFolder) + "/" + String(currentFileName);
+  String currentPath = currentLogPath();
   if (file == currentPath) {
     webServer.send(409, "text/plain", "Arquivo ainda sendo gravado. Aguarde a rotacao.");
     return;
@@ -644,7 +718,7 @@ static bool pollOnce() {
   uint8_t len = hdr[2];
   if (len == 0 || len > MAX_FRAME) return false;
   if (!readExact(frame, len, 25)) return false;
-  logFrame(0, frame, len);
+  enqueueFrame(0, frame, len);
   return true;
 }
 
@@ -718,12 +792,12 @@ static void onEcuBytes(const uint8_t* p, size_t n) {
     }
     if (pend.expect && pend.got == pend.expect) {
       if (pend.kind == 'n') {
-        logFrame(1, rbuf + 3, rbuf[2]);
+        enqueueFrame(1, rbuf + 3, rbuf[2]);
 #if SNIFF_DEBUG
         Serial.printf("sniff n len=%u\n", rbuf[2]);
 #endif
       } else {
-        logFrame(1, rbuf + R_REPLY_HEADER, pend.len);
+        enqueueFrame(1, rbuf + R_REPLY_HEADER, pend.len);
 #if SNIFF_DEBUG
         Serial.printf("sniff r len=%u\n", pend.len);
 #endif
@@ -784,6 +858,54 @@ static void ledStep() {
   if (millis() - t >= period) { t = millis(); s = !s; digitalWrite(LED_PIN, s); }
 }
 
+// ---------------------------- TAREFAS FREERTOS ---------------------------
+// Task de comunicacao com a ECU (polling / bridge + sniffer).
+// Roda no Core 0 para nao ser afetada pela escrita no SD.
+static void ecuTask(void* parameter) {
+  (void)parameter;
+  static bool wasConnected = false;
+
+  for (;;) {
+    bool connected = linkConnected();
+    if (connected != wasConnected) {
+      wasConnected = connected;
+      onModeChange(connected);
+    }
+
+    if (connected) {
+      bridgeStep();
+    } else {
+      pollStep();
+    }
+
+    // Cede tempo para o sistema, mantendo a task responsiva.
+    vTaskDelay(pdMS_TO_TICKS(1));
+  }
+}
+
+// Task de escrita no SD. Consome frames da fila e grava no cartao.
+// Roda no Core 1 junto com o loop()/web server, mas em task separada.
+static void sdTask(void* parameter) {
+  (void)parameter;
+
+  for (;;) {
+    // Se o SD falhou, tenta reabrir periodicamente.
+    if (!sdOk && millis() - lastSdTry > 5000) {
+      lastSdTry = millis();
+      if (xSemaphoreTake(sdMutex, portMAX_DELAY) == pdTRUE) {
+        sdOk = openLog();
+        xSemaphoreGive(sdMutex);
+      }
+    }
+
+    LogFrame frame;
+    if (xQueueReceive(frameQueue, &frame, pdMS_TO_TICKS(100)) == pdTRUE) {
+      writeFrameToSd(frame);
+    }
+  }
+}
+// -------------------------------------------------------------------------
+
 void setup() {
   Serial.begin(115200);
   pinMode(LED_PIN, OUTPUT);
@@ -817,19 +939,27 @@ void setup() {
   SerialBT.begin("Speeduino-ESP32");
   SerialBT.setPin("1234", 4);
 #endif
+
+  // FreeRTOS: fila, mutex e tasks
+  frameQueue = xQueueCreate(FRAME_QUEUE_SIZE, sizeof(LogFrame));
+  if (frameQueue == NULL) {
+    Serial.println("FATAL: nao foi possivel criar a fila de frames");
+    while (true) { delay(1000); }
+  }
+
+  sdMutex = xSemaphoreCreateMutex();
+  if (sdMutex == NULL) {
+    Serial.println("FATAL: nao foi possivel criar o mutex do SD");
+    while (true) { delay(1000); }
+  }
+
+  xTaskCreatePinnedToCore(ecuTask, "ecuTask", 4096, NULL, 2, &ecuTaskHandle, 0);
+  xTaskCreatePinnedToCore(sdTask,  "sdTask",  4096, NULL, 1, &sdTaskHandle,  1);
+
+  Serial.println("Tasks FreeRTOS iniciadas.");
 }
 
 void loop() {
-  static bool wasConnected = false;
-  bool connected = linkConnected();
-  if (connected != wasConnected) { wasConnected = connected; onModeChange(connected); }
-
-  if (!sdOk && millis() - lastSdTry > 5000) {
-    lastSdTry = millis();
-    sdOk = openLog();
-  }
-
-  if (connected) bridgeStep(); else pollStep();
   ledStep();
 #if USE_WIFI
   webServer.handleClient();

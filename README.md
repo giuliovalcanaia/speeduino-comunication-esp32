@@ -226,3 +226,17 @@ Se o DS3231 não for detectado no boot:
 - Limpeza automática de logs antigos quando o SD fica com menos de 100 MB livres.
 - Fallback para `/NO_RTC/` quando o RTC falha.
 - Criado sketch `set_rtc_time` com servidor web para conferência da hora.
+
+## Pontos em aberto / limitações conhecidas
+
+> **Latência do cartão SD vs. frequência de polling**
+>
+> O logger grava cada resposta da ECU como uma linha de CSV diretamente no SD (`logFile.write()`) e faz `flush()` a cada 1 segundo (`FLUSH_MS = 1000`). O polling autônomo é configurado para 30 Hz, mas **cartões SD lentos ou com picos de latência podem atrasar o loop principal e derrubar a frequência efetiva abaixo de 30 Hz**.
+>
+> Isso não é um problema de throughput (o volume de dados é pequeno, ~12 KB/s), mas de **latência imprevisível** das operações `write()` e, principalmente, `flush()`.
+>
+> **Ideias futuras para mitigar:**
+> - Medir no hardware real o tempo gasto em `logFrame()` e `flush()`.
+> - Criar um buffer circular de frames brutos na RAM (economiza espaço em relação a buffer de linhas CSV).
+> - Mover a escrita no SD para uma tarefa FreeRTOS no segundo core do ESP32, desacoplando a comunicação com a ECU da gravação no cartão.
+> - Ajustar `FLUSH_MS` ou adotar flush por tamanho acumulado, balanceando risco de perda de dados em queda de energia com a latência.
