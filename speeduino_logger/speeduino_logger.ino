@@ -10,6 +10,11 @@
   2) Nenhum cliente conectado:
        - o ESP32 pergunta sozinho à ECU (comando 'n') a POLL_HZ Hz e grava no SD
 
+  SERVIDOR WEB DE LOGS (modo Wi-Fi)
+  ---------------------------------
+  Com USE_WIFI = 1, o ESP32 tambem disponibiliza uma pagina em http://192.168.4.1/
+  para listar e baixar os arquivos CSV do cartao SD diretamente pelo navegador.
+
   TIMESTAMP E ORGANIZACAO DOS LOGS
   --------------------------------
   - Os logs usam a hora real de um RTC DS3231 via I2C.
@@ -63,8 +68,10 @@
 
 #if USE_WIFI
   #include <WiFi.h>
+  #include <WebServer.h>
   WiFiServer server(2000);
   WiFiClient wclient;
+  WebServer webServer(80);
 #else
   #include "BluetoothSerial.h"
   BluetoothSerial SerialBT;
@@ -434,6 +441,181 @@ static void logFrame(uint8_t src, const uint8_t* p, uint8_t n) {
 }
 // -------------------------------------------------------------------------
 
+// --------------------------- SERVIDOR WEB DE LOGS ------------------------
+// Disponivel apenas no modo Wi-Fi. Permite listar e baixar os arquivos CSV
+// do cartao SD diretamente pelo navegador em http://192.168.4.1/
+#if USE_WIFI
+
+static String htmlEscape(const String& s) {
+  String r;
+  r.reserve(s.length() + 8);
+  for (size_t i = 0; i < s.length(); i++) {
+    char c = s[i];
+    switch (c) {
+      case '&': r += "&amp;";  break;
+      case '<': r += "&lt;";   break;
+      case '>': r += "&gt;";   break;
+      case '"': r += "&quot;"; break;
+      default:  r += c;        break;
+    }
+  }
+  return r;
+}
+
+static String urlEncode(const String& s) {
+  String r;
+  r.reserve(s.length() * 3);
+  for (size_t i = 0; i < s.length(); i++) {
+    char c = s[i];
+    if (isalnum((unsigned char)c) || c == '-' || c == '_' || c == '.' || c == '~' || c == '/') {
+      r += c;
+    } else {
+      char buf[4];
+      snprintf(buf, sizeof(buf), "%%%02X", (unsigned char)c);
+      r += buf;
+    }
+  }
+  return r;
+}
+
+static String urlDecode(const String& s) {
+  String r;
+  r.reserve(s.length());
+  for (size_t i = 0; i < s.length(); i++) {
+    char c = s[i];
+    if (c == '%' && i + 2 < s.length()) {
+      char hex[3] = {s[i + 1], s[i + 2], '\0'};
+      r += (char)strtol(hex, NULL, 16);
+      i += 2;
+    } else if (c == '+') {
+      r += ' ';
+    } else {
+      r += c;
+    }
+  }
+  return r;
+}
+
+static bool isPathSafe(const String& path) {
+  if (!path.startsWith("/")) return false;
+  if (path.indexOf("..") >= 0) return false;
+  return true;
+}
+
+static String fileNameFromPath(const String& path) {
+  int idx = path.lastIndexOf('/');
+  if (idx < 0) return path;
+  return path.substring(idx + 1);
+}
+
+static void sendDirectoryListing() {
+  String dir = urlDecode(webServer.arg("dir"));
+  if (dir.length() == 0) dir = "/";
+  if (!isPathSafe(dir)) {
+    webServer.send(403, "text/plain", "Caminho invalido");
+    return;
+  }
+
+  String html =
+    "<!DOCTYPE html>"
+    "<html><head>"
+    "<meta charset=\"UTF-8\">"
+    "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">"
+    "<title>Speeduino Logs</title>"
+    "<style>"
+    "body{font-family:sans-serif;margin:20px;background:#f5f5f5;}"
+    "h1{color:#333;}"
+    "table{width:100%;max-width:900px;background:#fff;border-collapse:collapse;box-shadow:0 2px 4px rgba(0,0,0,0.1);}"
+    "th,td{padding:12px;text-align:left;border-bottom:1px solid #ddd;}"
+    "th{background:#0066cc;color:#fff;}"
+    "a{color:#0066cc;text-decoration:none;}"
+    "a:hover{text-decoration:underline;}"
+    ".up{font-weight:bold;}"
+    ".current{color:#999;font-style:italic;}"
+    "</style></head><body>"
+    "<h1>Logs do Speeduino</h1>"
+    "<p>Pasta: <strong>" + htmlEscape(dir) + "</strong></p>"
+    "<table><tr><th>Nome</th><th>Tamanho</th><th>Acao</th></tr>";
+
+  if (dir != "/") {
+    String parent = dir.substring(0, dir.lastIndexOf('/'));
+    if (parent.length() == 0) parent = "/";
+    html += "<tr><td class=\"up\" colspan=\"3\"><a href=\"/?dir=" + urlEncode(parent) + "\">[..]</a></td></tr>";
+  }
+
+  File folder = SD.open(dir.c_str());
+  if (!folder || !folder.isDirectory()) {
+    webServer.send(404, "text/plain", "Pasta nao encontrada");
+    return;
+  }
+
+  String currentPath = String(currentFolder) + "/" + String(currentFileName);
+  File entry = folder.openNextFile();
+  while (entry) {
+    String entryName = entry.name();
+    // entry.name() pode retornar caminho absoluto; isola o nome relativo
+    String displayName = fileNameFromPath(entryName);
+    String fullPath;
+    if (dir == "/") fullPath = "/" + displayName;
+    else            fullPath = dir + "/" + displayName;
+
+    html += "<tr>";
+    if (entry.isDirectory()) {
+      html += "<td>" + htmlEscape(displayName) + "/</td>";
+      html += "<td>-</td>";
+      html += "<td><a href=\"/?dir=" + urlEncode(fullPath) + "\">Abrir</a></td>";
+    } else {
+      html += "<td>" + htmlEscape(displayName) + "</td>";
+      html += "<td>" + String(entry.size()) + " bytes</td>";
+      if (fullPath == currentPath) {
+        html += "<td class=\"current\">gravando agora</td>";
+      } else {
+        html += "<td><a href=\"/download?file=" + urlEncode(fullPath) + "\">Download</a></td>";
+      }
+    }
+    html += "</tr>";
+    entry.close();
+    entry = folder.openNextFile();
+  }
+  folder.close();
+
+  html += "</table></body></html>";
+  webServer.send(200, "text/html; charset=utf-8", html);
+}
+
+static void handleDownload() {
+  String file = urlDecode(webServer.arg("file"));
+  if (file.length() == 0) {
+    webServer.send(400, "text/plain", "Parametro 'file' ausente");
+    return;
+  }
+  if (!isPathSafe(file)) {
+    webServer.send(403, "text/plain", "Caminho invalido");
+    return;
+  }
+
+  // Nao permite baixar o arquivo que ainda esta aberto para escrita.
+  String currentPath = String(currentFolder) + "/" + String(currentFileName);
+  if (file == currentPath) {
+    webServer.send(409, "text/plain", "Arquivo ainda sendo gravado. Aguarde a rotacao.");
+    return;
+  }
+
+  File f = SD.open(file.c_str(), FILE_READ);
+  if (!f) {
+    webServer.send(404, "text/plain", "Arquivo nao encontrado");
+    return;
+  }
+
+  String name = fileNameFromPath(file);
+  webServer.sendHeader("Content-Disposition", "attachment; filename=\"" + name + "\"");
+  webServer.streamFile(f, "text/csv");
+  f.close();
+}
+
+#endif
+// -------------------------------------------------------------------------
+
 // ---------------------------- MODO 2: POLLING ----------------------------
 static uint8_t frame[MAX_FRAME + 4];
 
@@ -625,8 +807,12 @@ void setup() {
   if (!sdOk) Serial.println("SD indisponivel (vai tentar de novo)");
 
 #if USE_WIFI
-  WiFi.softAP("SPEEDUINO-LOG", "speeduino");
+  WiFi.softAP("Speeduino", "qK95xvFC");
   server.begin();
+  webServer.on("/", HTTP_GET, sendDirectoryListing);
+  webServer.on("/download", HTTP_GET, handleDownload);
+  webServer.begin();
+  Serial.println("Servidor web de logs em http://192.168.4.1/");
 #else
   SerialBT.begin("Speeduino-ESP32");
   SerialBT.setPin("1234", 4);
@@ -645,4 +831,7 @@ void loop() {
 
   if (connected) bridgeStep(); else pollStep();
   ledStep();
+#if USE_WIFI
+  webServer.handleClient();
+#endif
 }

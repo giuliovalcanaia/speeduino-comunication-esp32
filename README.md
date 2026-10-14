@@ -209,7 +209,7 @@ Se o DS3231 não for detectado no boot:
    - Insira um cartão micro SD formatado em FAT32.
 
 3. **Conecte o TunerStudio:**
-   - Conecte o computador/celular à rede `SPEEDUINO-LOG` (senha: `speeduino`).
+   - Conecte o computador/celular à rede `Speeduino` (senha: `qK95xvFC`).
    - No TunerStudio, use o driver **TCP/IP – WiFi driver** com IP `192.168.4.1` e porta `2000`.
 
 4. **Verifique os logs:**
