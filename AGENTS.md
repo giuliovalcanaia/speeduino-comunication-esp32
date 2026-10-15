@@ -5,9 +5,19 @@ This is a hardware Arduino/ESP32 project, not a conventional software repo. Ther
 ## Project layout
 
 - `set_rtc_time/set_rtc_time.ino` — standalone utility to set/check the DS3231 RTC.
-- `speeduino_logger/speeduino_logger.ino` — main logger sketch.
+- `speeduino_logger/` — main logger sketch and its modules.
+  - `speeduino_logger.ino` — `setup()`/`loop()` and FreeRTOS task creation.
+  - `config.h` — all constants and `#define USE_WIFI`.
+  - `channels.h/.cpp` — realtime-data channel table `CH[]`.
+  - `rtc_time.h/.cpp` — DS3231 wrapper and ISO 8601 formatting.
+  - `frame_queue.h/.cpp` — FreeRTOS queue of raw frames.
+  - `log_store.h/.cpp` — SD card: open/rotate/cleanup/CSV write.
+  - `transport.h/.cpp` — Wi-Fi AP + TCP 2000 or Bluetooth SPP.
+  - `ecu_bridge.h/.cpp` — Serial2, polling command `n`, bridge + sniffer.
+  - `web_ui.h/.cpp` — read-only HTTP log browser (`USE_WIFI = 1`).
+  - `led_status.h/.cpp` — LED blink patterns.
 
-The two sketches are independent and must be compiled/flashed separately.
+The two sketches are independent and must be compiled/flashed separately. All `.h/.cpp` files in `speeduino_logger/` are compiled automatically by the Arduino IDE / `arduino-cli`.
 
 ## Build requirements
 
@@ -35,7 +45,7 @@ The RTC is set from `__DATE__` / `__TIME__` at compile time, so flashing near th
 
 ### Transport mode (`speeduino_logger`)
 
-`#define USE_WIFI 1` at the top of `speeduino_logger/speeduino_logger.ino` selects the link:
+`#define USE_WIFI 1` at the top of `speeduino_logger/config.h` selects the link:
 
 - `1` — ESP32 creates AP `Speeduino` (password `qK95xvFC`). It listens for TunerStudio on TCP port `2000` and serves a log browser on HTTP port `80` at `192.168.4.1`.
 - `0` — Bluetooth SPP with name `Speeduino-ESP32` and PIN `1234`. The web log browser is not available in this mode.
@@ -104,5 +114,5 @@ For `USE_WIFI` mode, use the **TCP/IP – WiFi driver** with:
 ## Gotchas
 
 - There is no automated test, lint, or typecheck. Verification is flashing and observing serial output/LED.
-- `R_REPLY_HEADER` in `speeduino_logger.ino` may need adjustment (`0` for primary port, `2` for Serial3 secondary port). Use `SNIFF_DEBUG 1` to verify.
-- Channel scales in `CH[]` (especially `PW1_ms`, `TPS_pct`, `AFR_target`) must be confirmed against the `speeduino.ini` of the target firmware version.
+- `R_REPLY_HEADER` in `speeduino_logger/config.h` may need adjustment (`0` for primary port, `2` for Serial3 secondary port). Use `SNIFF_DEBUG 1` to verify.
+- Channel scales in `CH[]` in `speeduino_logger/channels.cpp` (especially `PW1_ms`, `TPS_pct`, `AFR_target`) must be confirmed against the `speeduino.ini` of the target firmware version.

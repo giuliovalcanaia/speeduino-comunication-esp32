@@ -35,7 +35,16 @@ A adição do RTC DS3231 permite que cada linha do log tenha um **timestamp real
 ```
 speeduino-comunication-esp32/
 ├── speeduino_logger/
-│   └── speeduino_logger.ino   # Sketch principal de logging
+│   ├── speeduino_logger.ino   # Sketch principal: setup, loop e tasks
+│   ├── config.h               # Constantes, pinos e USE_WIFI
+│   ├── channels.h/.cpp        # Tabela de canais gravados no CSV
+│   ├── rtc_time.h/.cpp        # DS3231 e formatação ISO 8601
+│   ├── frame_queue.h/.cpp     # Fila FreeRTOS de frames brutos
+│   ├── log_store.h/.cpp       # SD: abertura, rotação, limpeza e CSV
+│   ├── transport.h/.cpp       # Wi-Fi AP + TCP 2000 ou Bluetooth SPP
+│   ├── ecu_bridge.h/.cpp      # Serial2, polling e ponte/sniffer
+│   ├── web_ui.h/.cpp          # Servidor HTTP de logs (USE_WIFI = 1)
+│   └── led_status.h/.cpp      # Padrões do LED
 └── set_rtc_time/
     └── set_rtc_time.ino       # Sketch para ajustar e conferir o RTC
 ```
@@ -106,7 +115,7 @@ static const int HOURS_TO_SUBTRACT_FROM_UTC = 3;
 
 Sketch principal. Faz a ponte com a ECU, o sniffer dos dados e o logging no SD.
 
-**Principais constantes configuráveis:**
+**Principais constantes configuráveis** (em `speeduino_logger/config.h`):
 
 ```cpp
 static const uint32_t POLL_HZ              = 30;                 // polling autonomo
@@ -226,6 +235,9 @@ Se o DS3231 não for detectado no boot:
 - Limpeza automática de logs antigos quando o SD fica com menos de 100 MB livres.
 - Fallback para `/NO_RTC/` quando o RTC falha.
 - Criado sketch `set_rtc_time` com servidor web para conferência da hora.
+- Refatorado `speeduino_logger.ino` em módulos `.h/.cpp` (`config`, `transport`, `ecu_bridge`, `frame_queue`, `log_store`, `web_ui`, `led_status`).
+- `/NO_RTC/` passou a ser incluído na limpeza automática de logs antigos.
+- `sdTask` com stack aumentado e download de logs segmentado no servidor web.
 
 ## Pontos em aberto / limitações conhecidas
 
