@@ -337,12 +337,15 @@ bool logStoreInit() {
 }
 
 void logStoreEnsureOpen() {
-  if (logFileOpen) return;
-  if (!recordingArmed) return;   // nao cria arquivo antes da primeira consulta
+  // Nao abre arquivo preventivamente. O arquivo so e criado quando
+  // logStoreWriteFrame() receber um frame para gravar. Aqui tentamos apenas
+  // remontar o SD periodicamente, para que o servidor web continue
+  // funcionando caso o cartao tenha sido reinserido.
+  if (sdMounted) return;
   if (millis() - lastSdTry <= SD_REOPEN_MS) return;
   lastSdTry = millis();
   logStoreLock();
-  logFileOpen = openLog();
+  sdMounted = mountSd();
   logStoreUnlock();
 }
 
