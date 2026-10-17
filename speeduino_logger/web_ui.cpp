@@ -6,6 +6,7 @@
 #include <WebServer.h>
 #include <SD.h>
 #include "log_store.h"
+#include "rtc_time.h"
 
 static WebServer webServer(80);
 
@@ -109,6 +110,7 @@ static void sendDirectoryListing() {
     ".current{color:#999;font-style:italic;}"
     "</style></head><body>"
     "<h1>Logs do Speeduino</h1>"
+    "<p><a href=\"/sync\">Sincronizar hora do RTC</a></p>"
     "<p>Pasta: <strong>" + htmlEscape(dir) + "</strong></p>"
     "<table><tr><th>Nome</th><th>Tamanho</th><th>Acao</th></tr>";
 
@@ -203,9 +205,116 @@ static void handleDownload() {
   logStoreUnlock();
 }
 
+static void handleSyncGet() {
+  char rtcIso[24] = "indisponivel";
+  bool haveRtc = rtcAvailable();
+  if (haveRtc) {
+    DateTime now = rtcNow();
+    formatDateTime(now, rtcIso, sizeof(rtcIso));
+  }
+
+  String html =
+    "<!DOCTYPE html>"
+    "<html><head>"
+    "<meta charset=\"UTF-8\">"
+    "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">"
+    "<title>Sincronizar RTC - Speeduino</title>"
+    "<style>"
+    "body{font-family:sans-serif;margin:20px;background:#f5f5f5;}"
+    "h1{color:#333;}"
+    ".box{width:100%;max-width:600px;background:#fff;padding:20px;box-shadow:0 2px 4px rgba(0,0,0,0.1);}"
+    "p{line-height:1.6;}"
+    "button{padding:12px 24px;font-size:1.1em;background:#0066cc;color:#fff;border:none;border-radius:4px;cursor:pointer;}"
+    "button:hover{background:#0055aa;}"
+    "button:disabled{background:#999;cursor:not-allowed;}"
+    ".status{margin-top:15px;padding:12px;border-radius:4px;display:none;}"
+    ".ok{background:#d4edda;color:#155724;}"
+    ".err{background:#f8d7da;color:#721c24;}"
+    "a{color:#0066cc;}"
+    "</style></head><body>"
+    "<div class=\"box\">"
+    "<h1>Sincronizar hora do RTC</h1>"
+    "<p>Hora atual do RTC: <strong id=\"rtcTime\">" + String(rtcIso) + "</strong></p>"
+    "<p>Hora deste dispositivo: <strong id=\"devTime\">--</strong></p>";
+
+  if (!haveRtc) {
+    html += "<p style=\"color:#c00;\"><strong>RTC nao detectado. Nao e possivel sincronizar.</strong></p>"
+            "<button disabled>Sincronizar com este dispositivo</button>";
+  } else {
+    html += "<p>Clique no botao abaixo para enviar a hora deste dispositivo para o ESP32.</p>"
+            "<button onclick=\"sync()\">Sincronizar com este dispositivo</button>";
+  }
+
+  html +=
+    "<div id=\"status\" class=\"status\"></div>"
+    "<p style=\"margin-top:20px;\"><a href=\"/\">&larr; Voltar aos logs</a></p>"
+    "</div>"
+    "<script>"
+    "function pad(n){return n<10?'0'+n:n;}"
+    "function formatLocalISO(d){"
+    "  return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+"
+    "         pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());"
+    "}"
+    "function updateDevTime(){"
+    "  document.getElementById('devTime').textContent=formatLocalISO(new Date());"
+    "}"
+    "function showStatus(msg,ok){"
+    "  var s=document.getElementById('status');"
+    "  s.textContent=msg;"
+    "  s.className='status '+(ok?'ok':'err');"
+    "  s.style.display='block';"
+    "}"
+    "function sync(){"
+    "  var iso=formatLocalISO(new Date());"
+    "  var btn=document.querySelector('button');"
+    "  btn.disabled=true;"
+    "  fetch('/sync',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'dt='+encodeURIComponent(iso)})"
+    "    .then(function(r){return r.text().then(function(t){return {ok:r.ok,text:t};});})"
+    "    .then(function(r){showStatus(r.text,r.ok);})"
+    "    .catch(function(e){showStatus('Erro de comunicacao: '+e,false);})"
+    "    .finally(function(){btn.disabled=false;});"
+    "}"
+    "updateDevTime();"
+    "setInterval(updateDevTime,1000);"
+    "</script>"
+    "</body></html>";
+
+  webServer.send(200, "text/html; charset=utf-8", html);
+}
+
+static void handleSyncPost() {
+  if (!rtcAvailable()) {
+    webServer.send(503, "text/plain", "RTC nao disponivel");
+    return;
+  }
+
+  String dt = webServer.arg("dt");
+  if (dt.length() == 0) {
+    webServer.send(400, "text/plain", "Parametro 'dt' ausente");
+    return;
+  }
+
+  if (!rtcSetFromISOString(dt.c_str())) {
+    webServer.send(400, "text/plain", "Formato invalido. Use YYYY-MM-DDTHH:MM:SS");
+    return;
+  }
+
+  bool rotated = logStoreRotate();
+
+  String msg = "RTC ajustado para " + dt;
+  if (rotated) {
+    msg += ". Log rotacionado.";
+  } else {
+    msg += ". Nao foi possivel rotacionar o log (SD indisponivel).";
+  }
+  webServer.send(200, "text/plain", msg);
+}
+
 void webUiInit() {
   webServer.on("/", HTTP_GET, sendDirectoryListing);
   webServer.on("/download", HTTP_GET, handleDownload);
+  webServer.on("/sync", HTTP_GET, handleSyncGet);
+  webServer.on("/sync", HTTP_POST, handleSyncPost);
   webServer.begin();
   Serial.println("Servidor web de logs em http://192.168.4.1/");
 }

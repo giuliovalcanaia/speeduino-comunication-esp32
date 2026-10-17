@@ -69,18 +69,20 @@ speeduino-comunication-esp32/
 | VCC | 3,3 V |
 | GND | GND |
 | SDA | GPIO21 |
-| SCL | GPIO22 |
+| SCL | GPIO19 |
 
 ### Ligação do módulo micro SD
 
 | SD | ESP32 |
 |---|---|
-| 3,3 V | 3,3 V |
+| VCC (5 V)* | VIN |
 | GND | GND |
-| CS | GPIO5 |
-| MOSI | GPIO23 |
-| CLK/SCK | GPIO18 |
-| MISO | GPIO19 |
+| CS | GPIO25 |
+| MOSI | GPIO27 |
+| CLK/SCK | GPIO26 |
+| MISO | GPIO14 |
+
+\* *Use 3,3 V se o seu módulo SD não tiver regulador interno 5 V → 3,3 V.*
 
 ## Sketches
 

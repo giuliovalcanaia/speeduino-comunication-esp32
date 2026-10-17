@@ -5,6 +5,7 @@ This is a hardware Arduino/ESP32 project, not a conventional software repo. Ther
 ## Project layout
 
 - `set_rtc_time/set_rtc_time.ino` — standalone utility to set/check the DS3231 RTC.
+- `set_rtc_time/upload_set_rtc_time.py` — helper script that compiles, uploads, and sends the exact PC time to the sketch via Serial for fine-tuning.
 - `speeduino_logger/` — main logger sketch and its modules.
   - `speeduino_logger.ino` — `setup()`/`loop()` and FreeRTOS task creation.
   - `config.h` — all constants and `#define USE_WIFI`.
@@ -41,7 +42,7 @@ Use the Arduino IDE or `arduino-cli` to compile and upload.
 - `0` if the build PC is already in local time (e.g. BRT).
 - `3` if the build PC is in UTC and you want BRT (UTC-3) stored in the RTC.
 
-The RTC is set from `__DATE__` / `__TIME__` at compile time, so flashing near the target time matters.
+The RTC is initially set from `__DATE__` / `__TIME__` at compile time, so flashing near the target time matters. The sketch also accepts a fine-tuning command via Serial in the format `SET:YYYY-MM-DDTHH:MM:SS` for a few seconds after boot; use `upload_set_rtc_time.py` to upload and send the exact PC time automatically.
 
 ### Transport mode (`speeduino_logger`)
 
@@ -70,18 +71,22 @@ The RTC is set from `__DATE__` / `__TIME__` at compile time, so flashing near th
 | VCC | 3.3 V |
 | GND | GND |
 | SDA | GPIO21 |
-| SCL | GPIO22 |
+| SCL | GPIO19 |
+
+The DS3231 accepts a supply voltage between **2.3 V and 5.5 V**, so 3.3 V is safe. Keep the I²C lines (SDA/SCL) at 3.3 V to match the ESP32 GPIO levels.
 
 ### Micro SD module
 
 | SD | ESP32 |
 |---|---|
-| 3.3 V | 3.3 V |
+| VCC (5 V)* | VIN |
 | GND | GND |
-| CS | GPIO5 |
-| MOSI | GPIO23 |
-| CLK/SCK | GPIO18 |
-| MISO | GPIO19 |
+| CS | GPIO25 |
+| MOSI | GPIO27 |
+| CLK/SCK | GPIO26 |
+| MISO | GPIO14 |
+
+\* *Use 3.3 V if your SD module lacks an internal 5 V → 3.3 V regulator.*
 
 ## Runtime behavior
 

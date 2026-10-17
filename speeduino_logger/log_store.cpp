@@ -239,6 +239,22 @@ void logStoreEnsureOpen() {
   logStoreUnlock();
 }
 
+bool logStoreRotate() {
+  logStoreLock();
+  if (sdOk && logFile) {
+    logFile.flush();
+    logFile.close();
+  }
+  sdOk = openLog();
+  logStoreUnlock();
+  if (sdOk) {
+    Serial.println("Log rotacionado via comando web");
+  } else {
+    Serial.println("Falha ao rotacionar log via comando web");
+  }
+  return sdOk;
+}
+
 void logStoreWriteFrame(const LogFrame& frame) {
   logStoreLock();
 

@@ -19,6 +19,13 @@ DateTime rtcNow();
 // "YYYY-MM-DDTHH:MM:SS"
 void formatDateTime(const DateTime& dt, char* out, size_t len);
 
+// Ajusta o RTC para a data/hora informada. Retorna true se o RTC estiver presente.
+bool rtcSet(const DateTime& dt);
+
+// Ajusta o RTC a partir de uma string ISO "YYYY-MM-DDTHH:MM:SS".
+// Retorna true se o RTC estiver presente e a string for valida.
+bool rtcSetFromISOString(const char* iso);
+
 // "/YYYY-MM-DD" (nome da pasta diaria)
 void dateFolderName(const DateTime& dt, char* out, size_t len);
 

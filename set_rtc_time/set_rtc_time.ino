@@ -3,8 +3,9 @@
 
   Este sketch:
   1. Ajusta o RTC DS3231 com a hora de compilacao do codigo.
-  2. Cria um ponto de acesso Wi-Fi aberto chamado "SPEEDUINO-RTC".
-  3. Disponibiliza uma pagina web simples em http://192.168.4.1 para
+  2. Pode receber um ajuste fino pela Serial no formato SET:YYYY-MM-DDTHH:MM:SS.
+  3. Cria um ponto de acesso Wi-Fi aberto chamado "SPEEDUINO-RTC".
+  4. Disponibiliza uma pagina web simples em http://192.168.4.1 para
      conferir a hora atual armazenada no RTC.
 
   IMPORTANTE sobre fuso horario:
@@ -17,11 +18,11 @@
 
   Ajuste essa constante antes de compilar conforme a configuracao do seu PC.
 
-  Ligação do DS3231 ao ESP32:
+  Ligacao do DS3231 ao ESP32:
     VCC -> 3V3
     GND -> GND
     SDA -> GPIO21
-    SCL -> GPIO22
+    SCL -> GPIO19
 
   Compilacao: placa "ESP32 Dev Module".
 */
@@ -34,10 +35,10 @@
 
 // ----------------------------- CONFIGURACAO ------------------------------
 static const int  RTC_SDA_PIN = 21;
-static const int  RTC_SCL_PIN = 22;
+static const int  RTC_SCL_PIN = 19;
 
 // Veja o comentario no inicio do arquivo sobre fuso horario.
-static const int  HOURS_TO_SUBTRACT_FROM_UTC = 3;
+static const int  HOURS_TO_SUBTRACT_FROM_UTC = 0;
 
 static const char* WIFI_AP_SSID = "SPEEDUINO-RTC";
 static const IPAddress LOCAL_IP(192, 168, 4, 1);
@@ -86,6 +87,58 @@ static void handleNotFound() {
   server.send(404, "text/plain", "Not found");
 }
 
+static bool parseSetCommand(const String& cmd, DateTime& out) {
+  // Formato esperado: SET:YYYY-MM-DDTHH:MM:SS
+  if (!cmd.startsWith("SET:")) return false;
+  if (cmd.length() < 21) return false;
+
+  int year   = cmd.substring(4, 8).toInt();
+  int month  = cmd.substring(9, 11).toInt();
+  int day    = cmd.substring(12, 14).toInt();
+  int hour   = cmd.substring(15, 17).toInt();
+  int minute = cmd.substring(18, 20).toInt();
+  int second = cmd.substring(21, 23).toInt();
+
+  if (year < 2000 || month < 1 || month > 12 || day < 1 || day > 31) return false;
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) return false;
+
+  out = DateTime(year, month, day, hour, minute, second);
+  return true;
+}
+
+static void waitForSerialTimeUpdate(unsigned long timeoutMs) {
+  Serial.println("Aguardando ajuste fino pela Serial...");
+  unsigned long start = millis();
+  String buffer;
+
+  while (millis() - start < timeoutMs) {
+    while (Serial.available()) {
+      char c = Serial.read();
+      if (c == '\n') {
+        buffer.trim();
+        DateTime newTime;
+        if (parseSetCommand(buffer, newTime)) {
+          rtc.adjust(newTime);
+          char iso[24];
+          formatDateTime(newTime, iso, sizeof(iso));
+          Serial.print("RTC ajustado via Serial: ");
+          Serial.println(iso);
+          return;
+        } else {
+          Serial.print("Comando ignorado: ");
+          Serial.println(buffer);
+        }
+        buffer = "";
+      } else if (c != '\r') {
+        buffer += c;
+      }
+    }
+    delay(10);
+  }
+
+  Serial.println("Timeout: mantendo horario de compilacao.");
+}
+
 void setup() {
   Serial.begin(115200);
   delay(1000);
@@ -121,6 +174,9 @@ void setup() {
   } else {
     Serial.println("(UTC-3 - horario de Sao Paulo)");
   }
+
+  // Permite ajuste fino pela Serial para corrigir o atraso entre compilacao e upload.
+  waitForSerialTimeUpdate(5000);
 
   WiFi.softAPConfig(LOCAL_IP, GATEWAY, SUBNET);
   WiFi.softAP(WIFI_AP_SSID, NULL);  // AP aberto, sem senha

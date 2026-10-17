@@ -18,15 +18,19 @@ static const int      ECU_TX_PIN       = 17;
 static const uint32_t ECU_RX_BUF_BYTES = 4096;  // aguenta uma escrita lenta no SD
 
 // --------------------------------- SD (SPI) --------------------------------
-static const int      SD_CS_PIN        = 5;
-static const int      SD_SCK_PIN       = 18;
-static const int      SD_MISO_PIN      = 19;
-static const int      SD_MOSI_PIN      = 23;
+// Mapeamento para ESP32 de 30 pinos:
+// - IO12 é evitado por causa do strapping de boot.
+// - O modulo SD é alimentado em 5 V (VIN) porque possui regulador interno
+//   5 V -> 3,3 V. Verifique se o seu modulo suporta isso antes de ligar.
+static const int      SD_CS_PIN        = 25;
+static const int      SD_SCK_PIN       = 26;
+static const int      SD_MISO_PIN      = 14;
+static const int      SD_MOSI_PIN      = 27;
 static const uint32_t SD_SPI_HZ        = 10000000;
 
 // ------------------------------- RTC (I2C) ---------------------------------
 static const int      RTC_SDA_PIN      = 21;
-static const int      RTC_SCL_PIN      = 22;
+static const int      RTC_SCL_PIN      = 19;  // remapeado para liberar GPIO22
 
 // ---------------------------- Polling / logging ----------------------------
 static const uint32_t POLL_HZ            = 30;                  // taxa do modo autonomo

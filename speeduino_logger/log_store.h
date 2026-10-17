@@ -24,6 +24,10 @@ void logStoreEnsureOpen();
 // flush/rotacao/cleanup conforme necessario.
 void logStoreWriteFrame(const LogFrame& frame);
 
+// Fecha o log atual e abre um novo imediatamente (util apos ajuste do RTC).
+// Retorna true se o novo log foi aberto com sucesso.
+bool logStoreRotate();
+
 // true = SD operante (pode gravar)
 bool logStoreIsOk();
 
