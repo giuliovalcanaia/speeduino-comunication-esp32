@@ -26,8 +26,15 @@ bool rtcSet(const DateTime& dt);
 // Retorna true se o RTC estiver presente e a string for valida.
 bool rtcSetFromISOString(const char* iso);
 
-// "/YYYY-MM-DD" (nome da pasta diaria)
+// "/YYYY/Mês/DD" (nome da pasta diaria, ex: "/2026/Outubro/17")
 void dateFolderName(const DateTime& dt, char* out, size_t len);
+
+// Nome do mes em portugues (1 = Janeiro, 12 = Dezembro).
+const char* monthNameInPortuguese(int month);
+
+// Converte nome do mes em portugues de volta para numero (1..12).
+// Retorna -1 se nao reconhecer.
+int monthNumberFromPortugueseName(const char* name);
 
 // "YYYY-MM-DDTHH-MM-SS.csv" (':' viram '-' porque nao sao permitidos no FAT32)
 void fileNameFromDateTime(const DateTime& dt, char* out, size_t len);

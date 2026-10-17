@@ -2,6 +2,7 @@
 #include "config.h"
 #include "transport.h"
 #include "frame_queue.h"
+#include "log_store.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -84,6 +85,7 @@ static void onClientBytes(const uint8_t* p, size_t n) {
     if (cbuf[0] == 'n' && clen == 1) {
       pend = Pending(); pend.active = true; pend.kind = 'n'; pend.t = now;
       clen = 0;
+      if (!logStoreIsArmed()) logStoreArm(true);
     } else if (cbuf[0] == 'r') {
       if (clen >= 7) {
         uint16_t off = cbuf[3] | (cbuf[4] << 8);
@@ -92,6 +94,7 @@ static void onClientBytes(const uint8_t* p, size_t n) {
         if (cbuf[2] == 0x30 && off == 0 && len > 0 && len <= MAX_FRAME) {
           pend.active = true; pend.kind = 'r'; pend.len = len;
           pend.expect = R_REPLY_HEADER + len; pend.t = now;
+          if (!logStoreIsArmed()) logStoreArm(true);
         }
         clen = 0;
       }
@@ -163,13 +166,21 @@ static void onModeChange(bool connected) {
   pend = Pending();
   clen = 0;
   drainEcu(50);                       // descarta resposta que estava em voo
-  Serial.println(connected ? "Modo: ponte + sniffer" : "Modo: polling autonomo");
+  if (connected) {
+    logStoreArm(false);               // so cria arquivo no primeiro comando do cliente
+    Serial.println("Modo: ponte + sniffer (aguardando primeiro comando)");
+  } else {
+    logStoreArm(true);                // polling autonomo: grava no primeiro frame
+    Serial.println("Modo: polling autonomo");
+  }
 }
 
 // --------------------------------- TASK ----------------------------------
 void ecuTaskFn(void* parameter) {
   (void)parameter;
-  static bool wasConnected = false;
+  // Inicia como true para forcar a transicao no primeiro loop e configurar
+  // corretamente o estado de gravacao (armado no polling, desarmado no bridge).
+  static bool wasConnected = true;
 
   for (;;) {
     bool connected = transportConnected();

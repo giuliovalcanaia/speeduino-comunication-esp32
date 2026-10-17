@@ -28,7 +28,7 @@ O ESP32 funciona como uma **ponte transparente** entre a ECU Speeduino e o Tuner
 
 Quando nenhum cliente está conectado, o ESP32 passa a fazer **polling autônomo** da ECU a 30 Hz e também grava os dados no SD.
 
-A adição do RTC DS3231 permite que cada linha do log tenha um **timestamp real** e que os arquivos sejam organizados em pastas diárias com nomes no padrão ISO 8601.
+A adição do RTC DS3231 permite que cada linha do log tenha um **timestamp real** e que os arquivos sejam organizados em uma hierarquia de ano, mês e dia.
 
 ## Estrutura do projeto
 
@@ -154,16 +154,16 @@ datetime,time_s,src,secl,status1,engine,dwell_ms,MAP_kPa,IAT_C,CLT_C,batt_V,O2_A
 
 ## Organização dos arquivos no SD
 
-Os logs são organizados em pastas diárias:
+Os logs são organizados em uma hierarquia de ano, mês (por extenso em português) e dia:
 
 ```
-/2026-10-14/2026-10-14T09-45-22.csv
-/2026-10-14/2026-10-14T10-12-07.csv
-/2026-10-15/2026-10-15T08-33-19.csv
+/2026/Outubro/14/2026-10-14T09-45-22.csv
+/2026/Outubro/14/2026-10-14T10-12-07.csv
+/2026/Outubro/15/2026-10-15T08-33-19.csv
 ```
 
-- Cada pasta representa um dia (`YYYY-MM-DD`).
-- Cada arquivo dentro da pasta recebe o timestamp de início da gravação.
+- A hierarquia é `/Ano/Mês/Dia/` (exemplo: `/2026/Outubro/14`).
+- Cada arquivo dentro da pasta do dia recebe o timestamp de início da gravação.
 - O nome do arquivo usa hífens no lugar dos dois-pontos, pois `:` não é permitido em nomes de arquivo no FAT32.
 
 ## Limpeza automática de logs antigos
@@ -171,10 +171,11 @@ Os logs são organizados em pastas diárias:
 Antes de criar qualquer novo arquivo de log, o sistema verifica o espaço livre no SD:
 
 - Se o espaço livre for **menor que 100 MB** (`SD_FREE_MARGIN_MB`):
-  1. Encontra o arquivo `.csv` mais antigo dentro das pastas diárias.
+  1. Encontra o arquivo `.csv` mais antigo dentro da hierarquia `/Ano/Mês/Dia/`.
   2. Remove o arquivo.
-  3. Remove a pasta se ficar vazia.
+  3. Remove as pastas do dia, do mês e do ano se ficarem vazias.
   4. Repete até liberar espaço suficiente.
+  5. Se não houver logs datados, remove os arquivos mais antigos da pasta `/NO_RTC/`.
 
 Se não houver mais logs antigos para remover e o espaço ainda for insuficiente, o logger para de gravar e sinaliza erro no LED.
 
@@ -190,12 +191,22 @@ Se o DS3231 não for detectado no boot:
 
 ## Indicação do LED
 
-| Padrão | Significado |
+O LED indica o estado por **códigos de piscada**. Cada código é repetido a cada 2 segundos:
+
+| Código | Significado |
 |---|---|
-| Piscando a cada 100 ms | Erro no SD |
-| Piscando a cada 200 ms | RTC falhou (fallback ativo) |
-| Piscando a cada 500 ms | Logando normalmente |
-| Piscando a cada 1500 ms | Aguardando conexão/polling |
+| 1 piscada | Erro no SD |
+| 2 piscadas | RTC falhou (fallback ativo) |
+| 3 piscadas | Logando normalmente |
+| 4 piscadas | Aguardando conexão/polling |
+
+Os tempos são configuráveis em `speeduino_logger/config.h`:
+
+```cpp
+static const uint32_t LED_BLINK_ON_MS    = 150;   // tempo ligado em cada piscada
+static const uint32_t LED_BLINK_OFF_MS   = 500;   // tempo apagado entre piscadas
+static const uint32_t LED_CODE_PAUSE_MS  = 2000;  // pausa entre repeticoes do codigo
+```
 
 ## Compilação
 
@@ -224,7 +235,8 @@ Se o DS3231 não for detectado no boot:
    - No TunerStudio, use o driver **TCP/IP – WiFi driver** com IP `192.168.4.1` e porta `2000`.
 
 4. **Verifique os logs:**
-   - Os arquivos CSV estarão organizados em pastas diárias no cartão SD.
+   - Os arquivos CSV estarão organizados em pastas por ano, mês e dia no cartão SD.
+   - Pela interface web em `http://192.168.4.1/` você pode navegar pelas pastas, fazer download e excluir arquivos `.csv` (o arquivo em gravação aparece como *"gravando agora"* e não pode ser baixado ou excluído).
    - Abra diretamente no MegaLogViewer ou Excel.
 
 ## Histórico de modificações
@@ -240,6 +252,7 @@ Se o DS3231 não for detectado no boot:
 - Refatorado `speeduino_logger.ino` em módulos `.h/.cpp` (`config`, `transport`, `ecu_bridge`, `frame_queue`, `log_store`, `web_ui`, `led_status`).
 - `/NO_RTC/` passou a ser incluído na limpeza automática de logs antigos.
 - `sdTask` com stack aumentado e download de logs segmentado no servidor web.
+- Estrutura de pastas no SD alterada de `/YYYY-MM-DD/` para `/Ano/Mês/Dia/`.
 
 ## Pontos em aberto / limitações conhecidas
 

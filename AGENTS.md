@@ -12,7 +12,7 @@ This is a hardware Arduino/ESP32 project, not a conventional software repo. Ther
   - `channels.h/.cpp` — realtime-data channel table `CH[]`.
   - `rtc_time.h/.cpp` — DS3231 wrapper and ISO 8601 formatting.
   - `frame_queue.h/.cpp` — FreeRTOS queue of raw frames.
-  - `log_store.h/.cpp` — SD card: open/rotate/cleanup/CSV write.
+  - `log_store.h/.cpp` — SD card: open/rotate/cleanup/CSV write, hierarchy `/Year/Month/Day/`.
   - `transport.h/.cpp` — Wi-Fi AP + TCP 2000 or Bluetooth SPP.
   - `ecu_bridge.h/.cpp` — Serial2, polling command `n`, bridge + sniffer.
   - `web_ui.h/.cpp` — read-only HTTP log browser (`USE_WIFI = 1`).
@@ -92,14 +92,15 @@ The DS3231 accepts a supply voltage between **2.3 V and 5.5 V**, so 3.3 V is saf
 
 - When no client is connected, the logger polls the ECU with command `n` at `POLL_HZ` (30 Hz) and logs replies.
 - When a TunerStudio/client is connected, the ESP32 acts as a transparent bridge and sniffs realtime-data replies.
-- CSV logs are stored under `/YYYY-MM-DD/YYYY-MM-DDTHH-MM-SS.csv` when the RTC is valid.
+- CSV logs are stored under `/YYYY/Mês/DD/YYYY-MM-DDTHH-MM-SS.csv` when the RTC is valid.
 - RTC failure fallback: `/NO_RTC/BOOT_<millis>.csv` with empty `datetime` column.
-- Auto-cleanup removes oldest `.csv` files (and empty date folders) if free SD space drops below `SD_FREE_MARGIN_MB` (100 MB).
-- LED patterns:
-  - 100 ms blink: SD error
-  - 200 ms blink: RTC failed / fallback active
-  - 500 ms blink: logging normally
-  - 1500 ms blink: waiting for connection / polling
+- Auto-cleanup removes oldest `.csv` files (and empty day/month/year folders) if free SD space drops below `SD_FREE_MARGIN_MB` (100 MB).
+- LED blink codes (each code repeats every `LED_CODE_PAUSE_MS`, default 2 s):
+  - 1 blink: SD error
+  - 2 blinks: RTC failed / fallback active
+  - 3 blinks: logging normally
+  - 4 blinks: waiting for connection / polling
+- LED timing configurable in `config.h` (`LED_BLINK_ON_MS`, `LED_BLINK_OFF_MS`, `LED_CODE_PAUSE_MS`).
 
 ## Web log browser
 
@@ -107,7 +108,7 @@ In `USE_WIFI` mode the ESP32 also runs a small read-only HTTP file browser at:
 
 - URL: `http://192.168.4.1/`
 
-It lists the SD card folders and files and lets you download any closed `.csv` log. The file currently being written is shown as *“gravando agora”* and cannot be downloaded until the logger rotates to a new file.
+It lists the SD card folders and files, lets you download any closed `.csv` log, and delete `.csv` files (with a confirmation prompt). The file currently being written is shown as *“gravando agora”* and cannot be downloaded or deleted until the logger rotates to a new file.
 
 ## TunerStudio connection
 

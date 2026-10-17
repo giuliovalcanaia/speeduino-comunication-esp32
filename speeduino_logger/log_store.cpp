@@ -8,12 +8,14 @@
 #include <freertos/semphr.h>
 
 static File     logFile;
-static bool     sdOk = false;
+static bool     sdMounted    = false;  // SD.begin() teve sucesso
+static bool     logFileOpen  = false;  // arquivo atual aberto para escrita
+static bool     recordingArmed = false; // autorizado a criar/abrir arquivo
 static uint32_t lastFlush = 0;
 static uint32_t lastSdTry = 0;
 
 static DateTime logStartDateTime;
-static char     currentFolder[16]   = "";
+static char     currentFolder[32]   = "";
 static char     currentFileName[40] = "";
 
 static SemaphoreHandle_t sdMutex = NULL;
@@ -21,18 +23,19 @@ static SemaphoreHandle_t sdMutex = NULL;
 void logStoreLock()   { xSemaphoreTake(sdMutex, portMAX_DELAY); }
 void logStoreUnlock() { xSemaphoreGive(sdMutex); }
 
-bool logStoreIsOk() { return sdOk; }
+bool logStoreIsOk() { return sdMounted; }
 
 String logStoreCurrentPath() {
-  char folder[16] = "";
+  char folder[32] = "";
   char file[40]   = "";
   logStoreLock();
+  bool open = logFileOpen;
   strncpy(folder, currentFolder, sizeof(folder) - 1);
   folder[sizeof(folder) - 1] = '\0';
   strncpy(file, currentFileName, sizeof(file) - 1);
   file[sizeof(file) - 1] = '\0';
   logStoreUnlock();
-  if (folder[0] == '\0' || file[0] == '\0') return "";
+  if (!open || folder[0] == '\0' || file[0] == '\0') return "";
   return String(folder) + "/" + String(file);
 }
 
@@ -44,23 +47,17 @@ static uint32_t sdFreeMB() {
   return (uint32_t)(sdFreeBytes() / (1024ULL * 1024ULL));
 }
 
-// Pastas de log: YYYY-MM-DD (10 chars) ou NO_RTC (fallback sem RTC)
-static bool isLogFolderName(const char* name) {
-  if (name[0] == '/') name++;
-  if (strcmp(name, "NO_RTC") == 0) return true;
-
-  size_t len = strlen(name);
-  if (len != 10) return false;
-  for (size_t i = 0; i < 10; i++) {
-    if (i == 4 || i == 7) {
-      if (name[i] != '-') return false;
-    } else {
-      if (name[i] < '0' || name[i] > '9') return false;
-    }
-  }
-  return true;
+static bool mountSd() {
+  SPI.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
+  return SD.begin(SD_CS_PIN, SPI, SD_SPI_HZ);
 }
 
+static bool isCsvFile(const char* name) {
+  size_t len = strlen(name);
+  return len > 4 && strcmp(name + len - 4, ".csv") == 0;
+}
+
+// Remove uma pasta se ela estiver vazia.
 static void removeFolderIfEmpty(const char* path) {
   File folder = SD.open(path);
   if (!folder || !folder.isDirectory()) return;
@@ -73,46 +70,108 @@ static void removeFolderIfEmpty(const char* path) {
   }
 }
 
-// Encontra o arquivo .csv mais antigo. Nomes ISO sao cronologicamente
-// ordenaveis em ordem lexicografica; os datados sao removidos antes dos
-// de /NO_RTC por causa da ordenacao ASCII ('/' < '2' < 'N').
-static bool findOldestLog(char* outPath, size_t len) {
-  File root = SD.open("/");
-  if (!root) return false;
+// Sobe a arvore removendo pastas vazias, ate a raiz (excluindo /NO_RTC).
+// Exemplo: /2026/Outubro/17 -> tenta remover 17, depois Outubro, depois 2026.
+static void removeEmptyFoldersUp(const char* path) {
+  char work[80];
+  strncpy(work, path, sizeof(work) - 1);
+  work[sizeof(work) - 1] = '\0';
 
-  bool found = false;
-  char oldest[64] = "";
+  while (strlen(work) > 1) {
+    // Nunca apaga a pasta de fallback automaticamente.
+    if (strcmp(work, "/NO_RTC") == 0) break;
+    removeFolderIfEmpty(work);
+    char* slash = strrchr(work + 1, '/');
+    if (!slash) break;
+    *slash = '\0';
+  }
+}
 
-  File folder = root.openNextFile();
-  while (folder) {
-    if (folder.isDirectory()) {
-      const char* folderName = folder.name();
-      if (isLogFolderName(folderName)) {
-        File f = folder.openNextFile();
-        while (f) {
-          if (!f.isDirectory()) {
-            const char* n = f.name();
-            size_t nlen = strlen(n);
-            if (nlen > 4 && strcmp(n + nlen - 4, ".csv") == 0) {
-              const char* fn = folderName;
-              if (fn[0] == '/') fn++;
-              char fullPath[64];
-              snprintf(fullPath, sizeof(fullPath), "/%s/%s", fn, n);
-              if (!found || strcmp(fullPath, oldest) < 0) {
-                found = true;
-                strncpy(oldest, fullPath, sizeof(oldest) - 1);
-                oldest[sizeof(oldest) - 1] = '\0';
-              }
-            }
-          }
-          f = folder.openNextFile();
+// Converte o caminho de um log em DateTime.
+// Esperado: /YYYY/Mes/DD/YYYY-MM-DDTHH-MM-SS.csv
+static bool parseLogPathToDateTime(const char* path, DateTime& out) {
+  // pula a barra inicial
+  const char* p = path;
+  if (p[0] == '/') p++;
+
+  int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
+  char monthName[16] = "";
+
+  // /YYYY/Mes/DD/arquivo.csv
+  int n = sscanf(p, "%4d/%15[^/]/%2d/%4d-%2d-%2dT%2d-%2d-%2d.csv",
+                 &year, monthName, &day,
+                 &year, &month, &day, &hour, &minute, &second);
+  if (n != 9) return false;
+
+  int mon = monthNumberFromPortugueseName(monthName);
+  if (mon < 1 || mon > 12) return false;
+
+  if (year < 2000 || year > 2099 || day < 1 || day > 31) return false;
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) return false;
+
+  out = DateTime(year, mon, day, hour, minute, second);
+  return true;
+}
+
+static void recursiveFindOldestLog(File& dir, const char* dirPath,
+                                   bool& found, DateTime& oldestDt,
+                                   char* oldestPath, size_t oldestLen) {
+  File entry = dir.openNextFile();
+  while (entry) {
+    String entryName = entry.name();
+    // entry.name() pode vir com caminho absoluto; isola o nome local
+    int idx = entryName.lastIndexOf('/');
+    String localName = (idx >= 0) ? entryName.substring(idx + 1) : entryName;
+
+    String fullPath = String(dirPath);
+    if (!fullPath.endsWith("/")) fullPath += "/";
+    fullPath += localName;
+
+    if (entry.isDirectory()) {
+      recursiveFindOldestLog(entry, fullPath.c_str(), found, oldestDt, oldestPath, oldestLen);
+    } else if (isCsvFile(localName.c_str())) {
+      DateTime dt;
+      if (parseLogPathToDateTime(fullPath.c_str(), dt)) {
+        if (!found || dt < oldestDt) {
+          found = true;
+          oldestDt = dt;
+          strncpy(oldestPath, fullPath.c_str(), oldestLen - 1);
+          oldestPath[oldestLen - 1] = '\0';
         }
       }
     }
-    folder.close();
-    folder = root.openNextFile();
+    entry.close();
+    entry = dir.openNextFile();
   }
-  root.close();
+}
+
+// Procura o arquivo .csv mais antigo dentro de uma pasta simples,
+// usando ordenacao lexicografica do nome (usado apenas para /NO_RTC).
+static bool findOldestFileLexicographically(const char* dirPath, char* outPath, size_t len) {
+  File dir = SD.open(dirPath);
+  if (!dir || !dir.isDirectory()) return false;
+
+  bool found = false;
+  char oldest[80] = "";
+
+  File f = dir.openNextFile();
+  while (f) {
+    if (!f.isDirectory()) {
+      const char* n = f.name();
+      if (isCsvFile(n)) {
+        char fullPath[80];
+        snprintf(fullPath, sizeof(fullPath), "%s/%s", dirPath, n);
+        if (!found || strcmp(fullPath, oldest) < 0) {
+          found = true;
+          strncpy(oldest, fullPath, sizeof(oldest) - 1);
+          oldest[sizeof(oldest) - 1] = '\0';
+        }
+      }
+    }
+    f.close();
+    f = dir.openNextFile();
+  }
+  dir.close();
 
   if (found) {
     strncpy(outPath, oldest, len - 1);
@@ -121,18 +180,64 @@ static bool findOldestLog(char* outPath, size_t len) {
   return found;
 }
 
+// Encontra o arquivo .csv mais antigo. Prefere logs datados
+// (/Ano/Mes/Dia/); so cai em /NO_RTC/ se nao houver mais nenhum log datado.
+static bool findOldestLog(char* outPath, size_t len) {
+  File root = SD.open("/");
+  if (!root) return false;
+
+  bool found = false;
+  DateTime oldestDt;
+  char oldest[80] = "";
+
+  recursiveFindOldestLog(root, "/", found, oldestDt, oldest, sizeof(oldest));
+  root.close();
+
+  if (found) {
+    strncpy(outPath, oldest, len - 1);
+    outPath[len - 1] = '\0';
+    return true;
+  }
+
+  // Fallback: se nao ha logs datados, remove o mais antigo de /NO_RTC.
+  return findOldestFileLexicographically("/NO_RTC", outPath, len);
+}
+
+// Cria uma arvore de diretorios nivel a nivel (SD.mkdir() geralmente
+// cria apenas o ultimo nivel; garantimos todos os pais).
+static bool ensurePathExists(const char* path) {
+  if (SD.exists(path)) return true;
+
+  char work[80];
+  strncpy(work, path, sizeof(work) - 1);
+  work[sizeof(work) - 1] = '\0';
+
+  // Cria cada prefixo em ordem crescente: /2026, /2026/Outubro, ...
+  for (char* p = work + 1; *p; p++) {
+    if (*p == '/') {
+      *p = '\0';
+      if (!SD.exists(work) && !SD.mkdir(work)) {
+        *p = '/';
+        return false;
+      }
+      *p = '/';
+    }
+  }
+  return SD.mkdir(work);
+}
+
 // Remove logs antigos ate liberar SD_FREE_MARGIN_MB.
 static bool ensureSpaceAvailable() {
   while (sdFreeMB() < SD_FREE_MARGIN_MB) {
-    char oldest[64];
+    char oldest[80];
     if (!findOldestLog(oldest, sizeof(oldest))) {
       Serial.println("SD cheio e nenhum log antigo para remover");
       return false;
     }
 
-    // Extrai o nome da pasta para verificar se ficara vazia depois.
-    char folder[16] = "";
-    const char* slash = strchr(oldest + 1, '/');
+    // Caminho da pasta que contem o arquivo (ex: /2026/Outubro/17).
+    char folder[32] = "";
+    const char* slash = strrchr(oldest, '/');
     if (slash) {
       size_t flen = slash - oldest;
       if (flen < sizeof(folder)) {
@@ -148,15 +253,17 @@ static bool ensureSpaceAvailable() {
     }
 
     if (folder[0]) {
-      removeFolderIfEmpty(folder);
+      removeEmptyFoldersUp(folder);
     }
   }
   return true;
 }
 
 static bool openLog() {
-  SPI.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
-  if (!SD.begin(SD_CS_PIN, SPI, SD_SPI_HZ)) return false;
+  if (!sdMounted) {
+    sdMounted = mountSd();
+    if (!sdMounted) return false;
+  }
 
   if (!ensureSpaceAvailable()) {
     Serial.println("SD sem espaco disponivel");
@@ -164,9 +271,9 @@ static bool openLog() {
   }
 
   DateTime now;
-  char folder[16];
+  char folder[32];
   char fileName[40];
-  char fullPath[64];
+  char fullPath[80];
 
   if (rtcAvailable()) {
     now = rtcNow();
@@ -178,9 +285,7 @@ static bool openLog() {
     snprintf(fileName, sizeof(fileName), "BOOT_%010lu.csv", (unsigned long)millis());
   }
 
-  if (!SD.exists(folder)) {
-    if (!SD.mkdir(folder)) return false;
-  }
+  if (!ensurePathExists(folder)) return false;
 
   snprintf(fullPath, sizeof(fullPath), "%s/%s", folder, fileName);
 
@@ -199,6 +304,7 @@ static bool openLog() {
 
   logFile = SD.open(fullPath, FILE_WRITE);
   if (!logFile) return false;
+  logFileOpen = true;
 
   logFile.print("datetime,time_s,src");
   for (size_t i = 0; i < NCH; i++) { logFile.print(','); logFile.print(CH[i].name); }
@@ -225,42 +331,74 @@ bool logStoreInit() {
     while (true) { delay(1000); }
   }
 
-  sdOk = openLog();
-  if (!sdOk) Serial.println("SD indisponivel (vai tentar de novo)");
-  return sdOk;
+  sdMounted = mountSd();
+  if (!sdMounted) Serial.println("SD indisponivel (vai tentar de novo)");
+  return sdMounted;
 }
 
 void logStoreEnsureOpen() {
-  if (sdOk) return;
+  if (logFileOpen) return;
+  if (!recordingArmed) return;   // nao cria arquivo antes da primeira consulta
   if (millis() - lastSdTry <= SD_REOPEN_MS) return;
   lastSdTry = millis();
   logStoreLock();
-  sdOk = openLog();
+  logFileOpen = openLog();
   logStoreUnlock();
 }
 
 bool logStoreRotate() {
   logStoreLock();
-  if (sdOk && logFile) {
+  if (logFileOpen && logFile) {
     logFile.flush();
     logFile.close();
+    logFileOpen = false;
   }
-  sdOk = openLog();
+  recordingArmed = true;
+  logFileOpen = openLog();
   logStoreUnlock();
-  if (sdOk) {
+  if (logFileOpen) {
     Serial.println("Log rotacionado via comando web");
   } else {
     Serial.println("Falha ao rotacionar log via comando web");
   }
-  return sdOk;
+  return logFileOpen;
+}
+
+void logStoreArm(bool armed) {
+  logStoreLock();
+  recordingArmed = armed;
+  if (!armed && logFileOpen && logFile) {
+    logFile.flush();
+    logFile.close();
+    logFileOpen = false;
+    currentFolder[0]   = '\0';
+    currentFileName[0] = '\0';
+  }
+  logStoreUnlock();
+}
+
+bool logStoreIsArmed() {
+  bool armed;
+  logStoreLock();
+  armed = recordingArmed;
+  logStoreUnlock();
+  return armed;
 }
 
 void logStoreWriteFrame(const LogFrame& frame) {
   logStoreLock();
 
-  if (!sdOk) {
+  if (!recordingArmed) {
     logStoreUnlock();
     return;
+  }
+
+  if (!logFileOpen) {
+    logFileOpen = openLog();
+    if (!logFileOpen) {
+      logStoreUnlock();
+      return;
+    }
   }
 
   uint32_t t = frame.ms;
@@ -296,7 +434,8 @@ void logStoreWriteFrame(const LogFrame& frame) {
   line[pos++] = '\n';
 
   if (logFile.write((const uint8_t*)line, pos) != pos) {
-    sdOk = false;               // cartao removido / erro: tenta reabrir depois
+    sdMounted   = false;        // cartao removido / erro: tenta reabrir depois
+    logFileOpen = false;
     logFile.close();
     logStoreUnlock();
     return;
@@ -316,7 +455,7 @@ void logStoreWriteFrame(const LogFrame& frame) {
   if (rotate) {
     logFile.flush();
     logFile.close();
-    sdOk = openLog();
+    logFileOpen = openLog();
   }
 
   logStoreUnlock();

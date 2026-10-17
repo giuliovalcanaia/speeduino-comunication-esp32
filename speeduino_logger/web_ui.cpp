@@ -106,13 +106,16 @@ static void sendDirectoryListing() {
     "th{background:#0066cc;color:#fff;}"
     "a{color:#0066cc;text-decoration:none;}"
     "a:hover{text-decoration:underline;}"
-    ".up{font-weight:bold;}"
-    ".current{color:#999;font-style:italic;}"
-    "</style></head><body>"
-    "<h1>Logs do Speeduino</h1>"
-    "<p><a href=\"/sync\">Sincronizar hora do RTC</a></p>"
-    "<p>Pasta: <strong>" + htmlEscape(dir) + "</strong></p>"
-    "<table><tr><th>Nome</th><th>Tamanho</th><th>Acao</th></tr>";
+     ".up{font-weight:bold;}"
+     ".current{color:#999;font-style:italic;}"
+     ".btn-delete{background:#c00;color:#fff;border:none;padding:6px 12px;border-radius:4px;cursor:pointer;margin-left:8px;font-size:0.9em;}"
+     ".btn-delete:hover{background:#a00;}"
+     ".btn-delete:disabled{background:#999;cursor:not-allowed;}"
+     "</style></head><body>"
+     "<h1>Logs do Speeduino</h1>"
+     "<p><a href=\"/sync\">Sincronizar hora do RTC</a></p>"
+     "<p>Pasta: <strong>" + htmlEscape(dir) + "</strong></p>"
+     "<table><tr><th>Nome</th><th>Tamanho</th><th>Acao</th></tr>";
 
   if (dir != "/") {
     String parent = dir.substring(0, dir.lastIndexOf('/'));
@@ -140,7 +143,8 @@ static void sendDirectoryListing() {
       if (fullPath == currentPath) {
         html += "<td class=\"current\">gravando agora</td>";
       } else {
-        html += "<td><a href=\"/download?file=" + urlEncode(fullPath) + "\">Download</a></td>";
+        html += "<td><a href=\"/download?file=" + urlEncode(fullPath) + "\">Download</a>"
+                "<button class=\"btn-delete\" onclick=\"deleteFile('" + htmlEscape(displayName) + "','/delete?file=" + urlEncode(fullPath) + "')\">Excluir</button></td>";
       }
     }
     html += "</tr>";
@@ -150,7 +154,20 @@ static void sendDirectoryListing() {
   folder.close();
   logStoreUnlock();
 
-  html += "</table></body></html>";
+  html += "</table>"
+          "<script>"
+          "function deleteFile(name,url){"
+          "  if(confirm('Tem certeza que deseja excluir '+name+'?')){"
+          "    fetch(url,{method:'POST'})"
+          "      .then(function(r){"
+          "        if(r.ok){ location.reload(); }"
+          "        else { r.text().then(function(t){ alert('Erro: '+t); }); }"
+          "      })"
+          "      .catch(function(e){ alert('Erro de comunicacao: '+e); });"
+          "  }"
+          "}"
+          "</script>"
+          "</body></html>";
   webServer.send(200, "text/html; charset=utf-8", html);
 }
 
@@ -310,9 +327,51 @@ static void handleSyncPost() {
   webServer.send(200, "text/plain", msg);
 }
 
+static bool isCsvFile(const char* name) {
+  size_t len = strlen(name);
+  return len > 4 && strcmp(name + len - 4, ".csv") == 0;
+}
+
+static void handleDelete() {
+  String file = urlDecode(webServer.arg("file"));
+  if (file.length() == 0) {
+    webServer.send(400, "text/plain", "Parametro 'file' ausente");
+    return;
+  }
+  if (!isPathSafe(file)) {
+    webServer.send(403, "text/plain", "Caminho invalido");
+    return;
+  }
+  if (!isCsvFile(file.c_str())) {
+    webServer.send(400, "text/plain", "Somente arquivos .csv podem ser excluidos");
+    return;
+  }
+
+  // Nao permite excluir o arquivo que ainda esta aberto para escrita.
+  String currentPath = logStoreCurrentPath();
+  if (file == currentPath) {
+    webServer.send(409, "text/plain", "Arquivo ainda sendo gravado. Aguarde a rotacao.");
+    return;
+  }
+
+  logStoreLock();
+  bool exists = SD.exists(file.c_str());
+  bool ok = exists && SD.remove(file.c_str());
+  logStoreUnlock();
+
+  if (!exists) {
+    webServer.send(404, "text/plain", "Arquivo nao encontrado");
+  } else if (!ok) {
+    webServer.send(500, "text/plain", "Falha ao remover o arquivo");
+  } else {
+    webServer.send(200, "text/plain", "Arquivo removido");
+  }
+}
+
 void webUiInit() {
   webServer.on("/", HTTP_GET, sendDirectoryListing);
   webServer.on("/download", HTTP_GET, handleDownload);
+  webServer.on("/delete", HTTP_POST, handleDelete);
   webServer.on("/sync", HTTP_GET, handleSyncGet);
   webServer.on("/sync", HTTP_POST, handleSyncPost);
   webServer.begin();

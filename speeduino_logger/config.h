@@ -57,6 +57,11 @@ static const int      LED_PIN            = 2;
 static const size_t   MAX_FRAME          = 250;
 static const uint16_t FRAME_QUEUE_SIZE   = 128;   // ~32 KB de RAM
 
+// --------------------------------- LED -------------------------------------
+static const uint32_t LED_BLINK_ON_MS    = 150;   // tempo ligado em cada piscada
+static const uint32_t LED_BLINK_OFF_MS   = 500;   // tempo apagado entre piscadas do mesmo codigo
+static const uint32_t LED_CODE_PAUSE_MS  = 2000;  // pausa apagado entre repeticoes do codigo
+
 // ------------------------------- Transporte --------------------------------
 static const char*    WIFI_AP_SSID       = "Speeduino";
 static const char*    WIFI_AP_PASS       = "qK95xvFC";

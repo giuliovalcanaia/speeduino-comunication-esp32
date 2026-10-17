@@ -30,9 +30,27 @@ void formatDateTime(const DateTime& dt, char* out, size_t len) {
            (int)dt.hour(), (int)dt.minute(), (int)dt.second());
 }
 
+static const char* const MONTH_NAMES_PT[] = {
+  "Janeiro", "Fevereiro", "Marco", "Abril", "Maio", "Junho",
+  "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
+};
+
+const char* monthNameInPortuguese(int month) {
+  if (month < 1 || month > 12) return "";
+  return MONTH_NAMES_PT[month - 1];
+}
+
+int monthNumberFromPortugueseName(const char* name) {
+  if (name == nullptr) return -1;
+  for (int i = 0; i < 12; i++) {
+    if (strcasecmp(name, MONTH_NAMES_PT[i]) == 0) return i + 1;
+  }
+  return -1;
+}
+
 void dateFolderName(const DateTime& dt, char* out, size_t len) {
-  snprintf(out, len, "/%04d-%02d-%02d",
-           (int)dt.year(), (int)dt.month(), (int)dt.day());
+  snprintf(out, len, "/%04d/%s/%02d",
+           (int)dt.year(), monthNameInPortuguese(dt.month()), (int)dt.day());
 }
 
 void fileNameFromDateTime(const DateTime& dt, char* out, size_t len) {
