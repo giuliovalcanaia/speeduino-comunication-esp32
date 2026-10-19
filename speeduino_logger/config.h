@@ -44,10 +44,8 @@ static const uint32_t MAX_LOG_SIZE_BYTES = 10UL * 1024 * 1024;  // 10 MB por arq
 static const uint32_t SD_FREE_MARGIN_MB  = 100;                 // mantem 100 MB livres no SD
 static const uint32_t SD_REOPEN_MS       = 5000;                // intervalo para tentar reabrir o SD
 
-// O starter do bridge e o cliente TCP do TunerStudio/ECU Manager.
-// false = usa apenas cliente TCP (recomendado).
-// true  = considera qualquer estacao associada ao AP.
-static const bool     BRIDGE_ON_ANY_WIFI_STATION = false;
+// O gatilho do bridge e o cliente TCP do TunerStudio/ECU Manager na porta 2000.
+// Apenas estar associado ao AP nao ativa o bridge.
 
 // Resposta framed do protocolo primario:
 //   [tamanho][RC_OK][dados...][CRC32]
