@@ -19,8 +19,11 @@ void enqueueFrame(uint8_t src, const uint8_t* p, uint8_t n) {
   frame.len = n;
   memcpy(frame.data, p, n);
 
-  xQueueSend(queue, &frame, portMAX_DELAY);
-  lastFrameMs = frame.ms;
+  // Timeout curto: se a task de SD nao acompanhou, descarta o frame para
+  // nunca bloquear ou atrasar a ponte ECU <-> cliente.
+  if (xQueueSend(queue, &frame, pdMS_TO_TICKS(10)) == pdTRUE) {
+    lastFrameMs = frame.ms;
+  }
 }
 
 bool dequeueFrame(LogFrame& frame, uint32_t timeoutMs) {
