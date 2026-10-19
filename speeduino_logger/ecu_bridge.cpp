@@ -10,9 +10,6 @@
 
 static HardwareSerial& ECU = Serial2;
 
-static constexpr uint8_t FRAME_SRC_POLL = 0;
-static constexpr uint8_t FRAME_SRC_SNIFF = 1;
-
 static constexpr uint32_t PEND_TIMEOUT_MS = 300;
 static constexpr uint32_t FRAME_GAP_MS = 100;
 static constexpr size_t PEND_QUEUE_SIZE = 16;

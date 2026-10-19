@@ -422,12 +422,12 @@ void logStoreWriteFrame(const LogFrame& frame) {
     pos = snprintf(line, sizeof(line), "%s,%lu.%03lu,%s",
                    dt,
                    (unsigned long)(t / 1000), (unsigned long)(t % 1000),
-                   frame.src == 0 ? "poll" : "sniff");
+                   frame.src == FRAME_SRC_POLL ? "poll" : "sniff");
   } else {
     // Fallback: datetime fica vazio, time_s continua funcionando
     pos = snprintf(line, sizeof(line), ",%lu.%03lu,%s",
                    (unsigned long)(t / 1000), (unsigned long)(t % 1000),
-                   frame.src == 0 ? "poll" : "sniff");
+                   frame.src == FRAME_SRC_POLL ? "poll" : "sniff");
   }
 
   for (size_t i = 0; i < NCH && pos < sizeof(line) - 24; i++) {
