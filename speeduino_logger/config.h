@@ -12,6 +12,8 @@
 #define USE_WIFI 1
 
 // ----------------------------- ECU (Serial2) -------------------------------
+// O ESP32 fica no conector HC-06 da Speeduino, que e ligado a Serial0 (D0/D1)
+// do Mega. O protocolo e o mesmo do TunerStudio (framed + CRC32).
 static const uint32_t ECU_BAUD         = 115200;
 static const int      ECU_RX_PIN       = 16;
 static const int      ECU_TX_PIN       = 17;
@@ -33,18 +35,24 @@ static const int      RTC_SDA_PIN      = 21;
 static const int      RTC_SCL_PIN      = 19;  // remapeado para liberar GPIO22
 
 // ---------------------------- Polling / logging ----------------------------
-static const uint32_t POLL_HZ            = 30;                  // taxa do modo autonomo
+static const uint32_t POLL_HZ            = 10;                  // taxa do modo autonomo
 static const uint32_t POLL_PERIOD_MS     = 1000 / POLL_HZ;
+static const uint32_t POLL_TIMEOUT_MS    = 100;                 // timeout total de uma resposta 'r'
+static const uint32_t MODE_SETTLE_MS     = 500;                 // espera > SERIAL_TIMEOUT (400 ms) da Speeduino
 static const uint32_t FLUSH_MS           = 1000;                // flush no SD (corte de energia ao desligar o carro)
 static const uint32_t MAX_LOG_SIZE_BYTES = 10UL * 1024 * 1024;  // 10 MB por arquivo
 static const uint32_t SD_FREE_MARGIN_MB  = 100;                 // mantem 100 MB livres no SD
 static const uint32_t SD_REOPEN_MS       = 5000;                // intervalo para tentar reabrir o SD
 
-// Bytes que a ECU antepoe a resposta do comando 'r' (0x30):
-//   0 = porta principal (protocolo do TunerStudio, sem cabecalho)
-//   2 = porta secundaria (Serial3): responde 'r' + 0x30 antes dos dados
-// VERIFICAR no seu hardware com SNIFF_DEBUG = 1.
-static const uint8_t  R_REPLY_HEADER     = 0;
+// O starter do bridge e o cliente TCP do TunerStudio/ECU Manager.
+// false = usa apenas cliente TCP (recomendado).
+// true  = considera qualquer estacao associada ao AP.
+static const bool     BRIDGE_ON_ANY_WIFI_STATION = false;
+
+// Resposta framed do protocolo primario:
+//   [tamanho][RC_OK][dados...][CRC32]
+// O sniffer precisa pular o byte RC_OK antes dos 130 bytes de live data.
+static const uint8_t  R_REPLY_HEADER     = 1;
 
 #define SNIFF_DEBUG 0   // 1 = imprime no USB o que o sniffer classificou
 
