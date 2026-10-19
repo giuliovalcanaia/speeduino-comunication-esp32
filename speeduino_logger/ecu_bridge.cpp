@@ -274,8 +274,9 @@ static void onEcuFrame(const uint8_t* payload, uint16_t length) {
 
   // So consome o pending quando a resposta realmente parece ser do 'r'.
   // Respostas de Q/S/C tem outros tamanhos e nao podem ser confundidas.
-  if (length == pending.len + 1U && payload[0] == speeduino::RC_OK) {
-    enqueueFrame(FRAME_SRC_SNIFF, payload + 1,
+  if (length == pending.len + R_REPLY_HEADER &&
+      payload[0] == speeduino::RC_OK) {
+    enqueueFrame(FRAME_SRC_SNIFF, payload + R_REPLY_HEADER,
                  static_cast<uint8_t>(pending.len));
     pending.active = false;
 #if SNIFF_DEBUG
