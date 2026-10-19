@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#faf8ff">
+<title>Logs - Speeduino Log Server</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="app-header">
+  <div class="header-inner">
+    <div class="brand-row">
+      <div class="brand">
+        <div class="brand-mark"><span data-icon="memory"></span></div>
+        <div>
+          <div class="brand-title"><strong>Speeduino</strong><span class="brand-kicker">Log Server</span></div>
+          <span class="brand-sub">ESP32 // LOGS</span>
+        </div>
+      </div>
+    </div>
+    <div class="status-row">
+      <div class="status-group">
+        <span class="status-chip"><span class="dot"></span>AP: 192.168.4.1</span>
+      </div>
+      <div class="status-group">
+        <span class="status-chip"><span class="dot" id="rtc-dot"></span><span id="rtc-status">RTC SYNC</span></span>
+        <span class="status-chip"><span class="dot" id="sd-dot"></span><span id="sd-status">SD MOUNT</span></span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main class="page logs-page">
+  <section class="panel">
+    <div class="breadcrumb-bar">
+      <div class="breadcrumb" id="breadcrumb"></div>
+      <div class="breadcrumb-actions">
+        <a class="icon-btn" id="up-btn" href="#" aria-label="Subir pasta"><span data-icon="folder_up"></span></a>
+        <button class="icon-btn" id="refresh-btn" type="button" aria-label="Atualizar pasta"><span data-icon="sync"></span></button>
+      </div>
+    </div>
+    <div class="stats-row">
+      <div class="stats-pills" id="stats-pills"></div>
+      <span class="status-ok" id="fs-status"><span class="dot pulse"></span>FS PRONTO</span>
+    </div>
+  </section>
+
+  <section class="search-wrap">
+    <span data-icon="search"></span>
+    <input class="search-input" id="search-input" type="search" placeholder="Buscar .csv por hora ou nome..." autocomplete="off">
+  </section>
+
+  <section class="list" id="log-list"></section>
+
+  <section class="empty-state" id="empty-state">
+    <div class="empty-icon"><span data-icon="search"></span></div>
+    <h2 class="empty-title" id="empty-title">Nenhum log encontrado</h2>
+    <p class="empty-text" id="empty-text">Nenhum arquivo corresponde ao filtro nesta pasta.</p>
+  </section>
+</main>
+
+<nav class="bottom-nav">
+  <div class="nav-inner">
+    <a class="nav-item active" href="index.html" aria-current="page"><span data-icon="folder_data"></span><span>Logs</span></a>
+    <a class="nav-item" href="sd.html"><span data-icon="sd_card"></span><span>SD</span></a>
+    <a class="nav-item" href="rtc.html"><span data-icon="update"></span><span>RTC</span></a>
+  </div>
+</nav>
+
+<script src="common.js"></script>
+<script>
+var CURRENT_PATH = "/2025/Outubro/19/2025-10-19T12-34-56.csv";
+
+var TREE = {
+  "/": [
+    { name: "2025", type: "dir" },
+    { name: "NO_RTC", type: "dir" },
+    { name: "vazio", type: "dir" },
+    { name: "Casos estranhos", type: "dir" },
+    { name: "2025-10-18T22-10-00.csv", type: "file", size: 184320 }
+  ],
+  "/2025": [
+    { name: "Setembro", type: "dir" },
+    { name: "Outubro", type: "dir" }
+  ],
+  "/2025/Setembro": [
+    { name: "19", type: "dir" },
+    { name: "20", type: "dir" }
+  ],
+  "/2025/Setembro/19": [
+    { name: "2025-09-19T08-00-00.csv", type: "file", size: 128000 },
+    { name: "2025-09-19T12-00-00.csv", type: "file", size: 1048576 }
+  ],
+  "/2025/Setembro/20": [
+    { name: "2025-09-20T07-30-00.csv", type: "file", size: 987654 }
+  ],
+  "/2025/Outubro": [
+    { name: "18", type: "dir" },
+    { name: "19", type: "dir" }
+  ],
+  "/2025/Outubro/18": [
+    { name: "2025-10-18T22-10-00.csv", type: "file", size: 184320 }
+  ],
+  "/2025/Outubro/19": [
+    { name: "2025-10-19T08-00-00.csv", type: "file", size: 512000 },
+    { name: "2025-10-19T10-30-00.csv", type: "file", size: 401408 },
+    { name: "2025-10-19T12-34-56.csv", type: "file", size: 245760 }
+  ],
+  "/NO_RTC": [
+    { name: "BOOT_0000012345.csv", type: "file", size: 4096 }
+  ],
+  "/vazio": [],
+  "/Casos estranhos": [
+    { name: "log do Giulio's car.csv", type: "file", size: 64000 },
+    { name: "log & teste.csv", type: "file", size: 32000 },
+    { name: "relatório final (v2).csv", type: "file", size: 16000 },
+    { name: "arquivo_com_nome_extremamente_longo_para_testar_quebra_de_layout_2025-09-19T18-32-05.csv", type: "file", size: 2048 },
+    { name: "vazio.csv", type: "file", size: 0 },
+    { name: "erro.csv", type: "file", size: 8000 }
+  ]
+};
+
+var params = new URLSearchParams(location.search);
+var sdOk = params.get("sd") !== "0";
+var rtcOk = params.get("rtc") !== "0";
+var currentDir = "/";
+
+function setStatus() {
+  var rtcDot = document.getElementById("rtc-dot");
+  var rtcText = document.getElementById("rtc-status");
+  var sdDot = document.getElementById("sd-dot");
+  var sdText = document.getElementById("sd-status");
+  var fs = document.getElementById("fs-status");
+
+  rtcDot.className = "dot" + (rtcOk ? "" : " err");
+  rtcText.textContent = rtcOk ? "RTC SYNC" : "RTC OFF";
+  sdDot.className = "dot" + (sdOk ? "" : " err");
+  sdText.textContent = sdOk ? "SD MOUNT" : "SD OFF";
+  fs.className = "status-ok" + (sdOk ? "" : " bad");
+  fs.innerHTML = '<span class="dot' + (sdOk ? " pulse" : "") + '"></span>' + (sdOk ? "FS PRONTO" : "SD INDISPONÍVEL");
+}
+
+function parentOf(dir) {
+  if (dir === "/") return null;
+  var slash = dir.lastIndexOf("/");
+  return slash <= 0 ? "/" : dir.substring(0, slash);
+}
+
+function renderBreadcrumb() {
+  var root = document.getElementById("breadcrumb");
+  var parts = currentDir.split("/").filter(Boolean);
+  var items = [{ label: "/", path: "/" }];
+  var path = "";
+  parts.forEach(function (part) {
+    path += "/" + part;
+    items.push({ label: part, path: path });
+  });
+
+  var html = "";
+  items.forEach(function (item, index) {
+    if (index > 1) html += '<span class="crumb-sep">/</span>';
+    if (index === items.length - 1) {
+      html += '<span class="crumb current">' + escapeHtml(item.label) + "</span>";
+    } else {
+      html += '<a class="crumb" href="?dir=' + urlEncode(item.path) + '">' + escapeHtml(item.label) + "</a>";
+    }
+  });
+  root.innerHTML = html;
+
+  var up = document.getElementById("up-btn");
+  var parent = parentOf(currentDir);
+  if (parent === null) {
+    up.href = "#";
+    up.className = "icon-btn disabled";
+    up.setAttribute("aria-disabled", "true");
+  } else {
+    up.href = "?dir=" + urlEncode(parent);
+    up.className = "icon-btn";
+    up.removeAttribute("aria-disabled");
+  }
+}
+
+function renderStats(entries) {
+  var files = entries.filter(function (entry) { return entry.type === "file"; });
+  var folders = entries.filter(function (entry) { return entry.type === "dir"; });
+  var total = files.reduce(function (sum, entry) { return sum + entry.size; }, 0);
+  var html = '<span class="pill">' + icon("description") + " " + files.length + " arquivo" + (files.length === 1 ? "" : "s") + "</span>";
+  html += '<span class="pill">' + icon("pie_chart") + " " + formatBytes(total) + "</span>";
+  if (folders.length) {
+    html += '<span class="pill">' + icon("folder") + " " + folders.length + " pasta" + (folders.length === 1 ? "" : "s") + "</span>";
+  }
+  document.getElementById("stats-pills").innerHTML = html;
+}
+
+function fileMeta(name, noRtc) {
+  var parsed = parseLogName(name);
+  if (parsed) return parsed.date + " " + parsed.time;
+  return noRtc ? "Sem RTC" : "—";
+}
+
+function renderFileCard(entry, fullPath) {
+  var isCurrent = fullPath === CURRENT_PATH;
+  var noRtc = currentDir === "/NO_RTC";
+  var parsed = parseLogName(entry.name);
+  var badge;
+  if (isCurrent) {
+    badge = '<span class="badge badge-current"><span class="dot pulse"></span>GRAVANDO</span>';
+  } else if (noRtc) {
+    badge = '<span class="badge badge-warn"><span class="dot warn"></span>SEM RTC</span>';
+  } else if (parsed) {
+    badge = '<span class="badge badge-log"><span class="dot"></span>SPEEDUINO LOG</span>';
+  } else {
+    badge = '<span class="badge badge-muted">ARQUIVO</span>';
+  }
+
+  var html = '<article class="item-card log-card" data-name="' + escapeHtml(entry.name.toLowerCase()) + '">';
+  html += '<div class="item-top">' + badge + '<span class="badge badge-muted">CSV</span></div>';
+  html += '<h3 class="item-title">' + escapeHtml(entry.name) + "</h3>";
+  html += '<div class="item-meta">';
+  html += '<div class="meta-row"><span class="meta-label">Tamanho:</span><span class="meta-value">' + formatBytesDetailed(entry.size) + "</span></div>";
+  html += '<div class="meta-row"><span class="meta-label">Registro:</span><span class="meta-value">' + (isCurrent ? "em andamento" : fileMeta(entry.name, noRtc)) + "</span></div>";
+  html += "</div>";
+
+  if (isCurrent) {
+    html += '<div class="item-actions"><button class="btn btn-secondary" type="button" disabled>' + icon("clock") + " Gravando agora</button></div>";
+  } else {
+    var url = urlEncode(fullPath);
+    html += '<div class="item-actions">';
+    html += '<a class="btn btn-primary" href="/download?file=' + url + '">' + icon("download") + " Download</a>";
+    html += '<button class="btn btn-danger" type="button" data-delete data-file="' + escapeHtml(fullPath) + '" data-name="' + escapeHtml(entry.name) + '">' + icon("trash") + " Excluir</button>";
+    html += "</div>";
+  }
+  html += "</article>";
+  return html;
+}
+
+function render() {
+  var entries = TREE[currentDir];
+  if (!entries) {
+    document.getElementById("log-list").innerHTML = "";
+    document.getElementById("empty-title").textContent = "Pasta não encontrada";
+    document.getElementById("empty-text").textContent = "O caminho solicitado não existe no cartão SD.";
+    document.getElementById("empty-state").classList.add("visible");
+    return;
+  }
+
+  renderBreadcrumb();
+  renderStats(entries);
+
+  var html = "";
+  var parent = parentOf(currentDir);
+  if (parent !== null) {
+    html += '<a class="item-card folder-card parent-card" href="?dir=' + urlEncode(parent) + '">';
+    html += '<div class="folder-info"><div class="folder-icon">' + icon("folder_up") + '</div><div><div class="folder-name">Pasta acima</div><div class="folder-sub">Voltar para ' + escapeHtml(parent) + '</div></div></div>';
+    html += icon("chevron_right", "folder-arrow") + "</a>";
+  }
+
+  entries.forEach(function (entry) {
+    var fullPath = currentDir === "/" ? "/" + entry.name : currentDir + "/" + entry.name;
+    if (entry.type === "dir") {
+      html += '<a class="item-card folder-card" href="?dir=' + urlEncode(fullPath) + '" data-name="' + escapeHtml(entry.name.toLowerCase()) + '">';
+      html += '<div class="folder-info"><div class="folder-icon">' + icon("folder") + '</div><div><div class="folder-name">' + escapeHtml(entry.name) + '/</div><div class="folder-sub">Abrir pasta</div></div></div>';
+      html += icon("chevron_right", "folder-arrow") + "</a>";
+    } else {
+      html += renderFileCard(entry, fullPath);
+    }
+  });
+
+  document.getElementById("log-list").innerHTML = html;
+  document.getElementById("search-input").value = "";
+  applySearch();
+}
+
+function applySearch() {
+  var query = document.getElementById("search-input").value.toLowerCase().trim();
+  var cards = document.querySelectorAll("#log-list .log-card, #log-list .folder-card:not(.parent-card)");
+  var visible = 0;
+  cards.forEach(function (card) {
+    var name = (card.getAttribute("data-name") || "").toLowerCase();
+    var show = !query || name.indexOf(query) >= 0;
+    card.classList.toggle("hidden", !show);
+    if (show) visible++;
+  });
+
+  var empty = document.getElementById("empty-state");
+  var entries = TREE[currentDir] || [];
+  if (visible === 0) {
+    empty.classList.add("visible");
+    if (entries.length === 0) {
+      document.getElementById("empty-title").textContent = "Pasta vazia";
+      document.getElementById("empty-text").textContent = "Nenhum arquivo de log nesta pasta.";
+    } else {
+      document.getElementById("empty-title").textContent = "Nenhum log encontrado";
+      document.getElementById("empty-text").textContent = "Nenhum arquivo corresponde ao termo digitado nesta pasta.";
+    }
+  } else {
+    empty.classList.remove("visible");
+  }
+}
+
+function removeFile(fullPath) {
+  var slash = fullPath.lastIndexOf("/");
+  var parent = slash <= 0 ? "/" : fullPath.substring(0, slash);
+  var name = fullPath.substring(slash + 1);
+  var entries = TREE[parent];
+  if (!entries) return false;
+  for (var i = 0; i < entries.length; i++) {
+    if (entries[i].type === "file" && entries[i].name === name) {
+      entries.splice(i, 1);
+      return true;
+    }
+  }
+  return false;
+}
+
+document.getElementById("search-input").addEventListener("input", applySearch);
+
+document.getElementById("log-list").addEventListener("click", function (event) {
+  var button = event.target.closest("[data-delete]");
+  if (!button) return;
+  var name = button.getAttribute("data-name");
+  var file = button.getAttribute("data-file");
+  if (!confirm("Tem certeza que deseja excluir " + name + "?")) return;
+  button.disabled = true;
+  setTimeout(function () {
+    if (file.indexOf("erro.csv") >= 0) {
+      alert("Erro: Falha ao remover o arquivo");
+      button.disabled = false;
+      return;
+    }
+    if (!removeFile(file)) {
+      alert("Erro: Arquivo não encontrado");
+      button.disabled = false;
+      return;
+    }
+    render();
+  }, 650);
+});
+
+document.addEventListener("click", function (event) {
+  var link = event.target.closest('a[href^="/download?file="]');
+  if (!link) return;
+  event.preventDefault();
+  var file = new URL(link.getAttribute("href"), location.href).searchParams.get("file");
+  if (!file || file === CURRENT_PATH) return;
+  setTimeout(function () { fakeCsvDownload(file); }, 650);
+});
+
+document.getElementById("refresh-btn").addEventListener("click", function () {
+  var button = this;
+  button.classList.add("spin");
+  setTimeout(function () { button.classList.remove("spin"); }, 500);
+  render();
+});
+
+document.getElementById("up-btn").addEventListener("click", function (event) {
+  if (this.classList.contains("disabled")) event.preventDefault();
+});
+
+(function init() {
+  var dir = params.get("dir");
+  if (dir === null || dir === "") dir = "/";
+  if (!dir.startsWith("/") || dir.indexOf("..") >= 0) {
+    document.getElementById("log-list").innerHTML = "";
+    document.getElementById("empty-title").textContent = "Caminho inválido";
+    document.getElementById("empty-text").textContent = "O caminho solicitado não é permitido.";
+    document.getElementById("empty-state").classList.add("visible");
+    return;
+  }
+  if (dir.length > 1) dir = dir.replace(/\/+$/, "");
+  currentDir = dir;
+  setStatus();
+  render();
+})();
+</script>
+</body>
+</html>

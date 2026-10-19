@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#faf8ff">
+<title>RTC - Speeduino Log Server</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="app-header">
+  <div class="header-inner">
+    <div class="brand-row">
+      <div class="brand">
+        <div class="brand-mark"><span data-icon="memory"></span></div>
+        <div>
+          <div class="brand-title"><strong>Speeduino</strong><span class="brand-kicker">Log Server</span></div>
+          <span class="brand-sub">ESP32 // RTC</span>
+        </div>
+      </div>
+    </div>
+    <div class="status-row">
+      <div class="status-group">
+        <span class="status-chip"><span class="dot"></span>AP: 192.168.4.1</span>
+      </div>
+      <div class="status-group">
+        <span class="status-chip"><span class="dot" id="rtc-dot"></span><span id="rtc-status">RTC SYNC</span></span>
+        <span class="status-chip"><span class="dot" id="sd-dot"></span><span id="sd-status">SD MOUNT</span></span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main class="page">
+  <section class="panel status-panel">
+    <div>
+      <h2 class="card-title">Sincronização do RTC</h2>
+      <p class="card-sub">Diferença entre o DS3231 e este dispositivo</p>
+    </div>
+    <span class="delta-badge" id="delta-badge"><span data-icon="warning"></span><span id="delta-text">Δ --:--:--</span></span>
+  </section>
+
+  <div class="warning-box" id="rtc-warning">
+    <span data-icon="warning"></span>
+    <div><strong>RTC não detectado.</strong> Sincronização e ajuste manual ficam indisponíveis até o DS3231 responder.</div>
+  </div>
+
+  <section class="card time-card" id="rtc-card">
+    <div class="card-head">
+      <div class="card-identity">
+        <span class="live-dot pulse" id="rtc-live"></span>
+        <div>
+          <h2 class="card-title">ESP32 RTC</h2>
+          <p class="card-sub">DS3231 @ 0x68</p>
+        </div>
+      </div>
+      <span class="status-badge" id="rtc-badge"><span class="dot"></span><span id="rtc-badge-text">ATIVO</span></span>
+    </div>
+    <div class="time-grid">
+      <div class="time-field">
+        <span class="time-label">Data interna</span>
+        <span class="time-value" id="rtc-date">--</span>
+      </div>
+      <div class="time-field right">
+        <span class="time-label">Horário RTC</span>
+        <span class="time-value clock" id="rtc-clock">--:--:--</span>
+      </div>
+    </div>
+    <div class="diag-grid">
+      <div class="diag-tile"><span>Barramento</span><strong>I2C 400 kHz</strong></div>
+      <div class="diag-tile"><span>Backup</span><strong id="rtc-backup">OK</strong></div>
+      <div class="diag-tile"><span>Temperatura</span><strong id="rtc-temp">31,2 °C</strong></div>
+    </div>
+  </section>
+
+  <div class="transfer"><div class="transfer-icon"><span data-icon="sync_alt"></span></div></div>
+
+  <section class="card time-card">
+    <div class="card-head">
+      <div class="card-identity">
+        <span class="live-dot"></span>
+        <div>
+          <h2 class="card-title">Referência deste Smartphone</h2>
+          <p class="card-sub">Relógio local do navegador</p>
+        </div>
+      </div>
+      <span class="status-badge"><span class="dot"></span><span>SYS CLOCK</span></span>
+    </div>
+    <div class="time-grid">
+      <div class="time-field">
+        <span class="time-label">Data local</span>
+        <span class="time-value" id="phone-date">--</span>
+      </div>
+      <div class="time-field right">
+        <span class="time-label">Horário smartphone</span>
+        <span class="time-value clock" id="phone-clock">--:--:--</span>
+      </div>
+    </div>
+    <div class="diag-list">
+      <div class="diag-row"><span><span data-icon="public"></span> Fuso do navegador</span><strong id="timezone-label">GMT</strong></div>
+      <div class="diag-row"><span><span data-icon="verified"></span> Origem</span><strong>Relógio local</strong></div>
+    </div>
+  </section>
+
+  <div class="actions">
+    <button class="btn btn-primary btn-large" id="btn-sync" type="button"><span data-icon="sync"></span><span>Sincronizar RTC com este dispositivo</span></button>
+    <button class="btn btn-secondary btn-medium" id="btn-manual-toggle" type="button" aria-expanded="false"><span data-icon="tune"></span><span>Ajuste manual de data/hora</span></button>
+  </div>
+
+  <section class="card manual-form" id="manual-form">
+    <div class="form-head"><strong>Ajuste fino estático</strong><span>ISO 8601</span></div>
+    <div class="form-grid">
+      <div class="field">
+        <label for="manual-date">Data</label>
+        <input id="manual-date" type="date">
+      </div>
+      <div class="field">
+        <label for="manual-time">Horário</label>
+        <input id="manual-time" type="time" step="1">
+      </div>
+    </div>
+    <button class="btn btn-primary btn-medium" id="btn-manual-save" type="button"><span data-icon="check"></span><span>Gravar timestamp manual no DS3231</span></button>
+  </section>
+</main>
+
+<nav class="bottom-nav">
+  <div class="nav-inner">
+    <a class="nav-item" href="index.html"><span data-icon="folder_data"></span><span>Logs</span></a>
+    <a class="nav-item" href="sd.html"><span data-icon="sd_card"></span><span>SD</span></a>
+    <a class="nav-item active" href="rtc.html" aria-current="page"><span data-icon="update"></span><span>RTC</span></a>
+  </div>
+</nav>
+
+<div class="toast" id="toast">
+  <div class="toast-main"><span id="toast-icon"></span><span id="toast-message"></span></div>
+  <span class="toast-ack" id="toast-ack">ACK</span>
+</div>
+
+<script src="common.js"></script>
+<script>
+var params = new URLSearchParams(location.search);
+var rtcOk = params.get("rtc") !== "0";
+var sdOk = params.get("sd") !== "0";
+var lostPower = params.get("lost") === "1";
+var simulateFail = params.get("fail") === "1";
+var baseDeltaMs = params.has("delta") ? Number(params.get("delta")) * 1000 : -((2 * 3600 + 30 * 60 + 23) * 1000);
+var pageLoadedAt = Date.now();
+var rtcBaseMs = pageLoadedAt + (rtcOk ? baseDeltaMs : 0);
+var manualVisible = false;
+
+function rtcNow() {
+  return new Date(rtcBaseMs + (Date.now() - pageLoadedAt));
+}
+
+function formatDelta(ms) {
+  var total = Math.floor(Math.abs(ms) / 1000);
+  var sign = ms < 0 ? "-" : "+";
+  var h = Math.floor(total / 3600);
+  var m = Math.floor((total % 3600) / 60);
+  var s = total % 60;
+  return "Δ " + sign + pad(h) + ":" + pad(m) + ":" + pad(s);
+}
+
+function timezoneLabel() {
+  var offset = -new Date().getTimezoneOffset();
+  var sign = offset >= 0 ? "+" : "-";
+  var h = Math.floor(Math.abs(offset) / 60);
+  var m = Math.abs(offset) % 60;
+  return "GMT" + sign + pad(h) + pad(m);
+}
+
+function setStatus() {
+  var rtcDot = document.getElementById("rtc-dot");
+  var rtcText = document.getElementById("rtc-status");
+  var sdDot = document.getElementById("sd-dot");
+  var sdText = document.getElementById("sd-status");
+  rtcDot.className = "dot" + (rtcOk ? "" : " err");
+  rtcText.textContent = rtcOk ? "RTC SYNC" : "RTC OFF";
+  sdDot.className = "dot" + (sdOk ? "" : " err");
+  sdText.textContent = sdOk ? "SD MOUNT" : "SD OFF";
+
+  var badge = document.getElementById("rtc-badge");
+  var badgeText = document.getElementById("rtc-badge-text");
+  var warning = document.getElementById("rtc-warning");
+  var live = document.getElementById("rtc-live");
+  var syncButton = document.getElementById("btn-sync");
+  var manualButton = document.getElementById("btn-manual-toggle");
+  var saveButton = document.getElementById("btn-manual-save");
+
+  badge.className = "status-badge" + (rtcOk ? "" : " error");
+  badgeText.textContent = rtcOk ? "ATIVO" : "OFF";
+  warning.classList.toggle("visible", !rtcOk);
+  live.className = "live-dot" + (rtcOk ? " pulse" : "");
+  syncButton.disabled = !rtcOk;
+  manualButton.disabled = !rtcOk;
+  saveButton.disabled = !rtcOk;
+
+  if (!rtcOk) {
+    document.getElementById("rtc-date").textContent = "--";
+    document.getElementById("rtc-clock").textContent = "--:--:--";
+    document.getElementById("rtc-backup").textContent = "—";
+    document.getElementById("rtc-temp").textContent = "—";
+    document.getElementById("delta-badge").className = "delta-badge";
+    document.getElementById("delta-badge").innerHTML = icon("warning") + '<span id="delta-text">RTC OFF</span>';
+  }
+}
+
+function updateClocks() {
+  var now = new Date();
+  document.getElementById("phone-date").textContent = formatLocalDate(now);
+  document.getElementById("phone-clock").textContent = formatLocalTime(now);
+  document.getElementById("timezone-label").textContent = timezoneLabel();
+
+  if (!rtcOk) return;
+
+  var rtc = rtcNow();
+  document.getElementById("rtc-date").textContent = formatLocalDate(rtc);
+  document.getElementById("rtc-clock").textContent = formatLocalTime(rtc);
+
+  var delta = rtc.getTime() - now.getTime();
+  var badge = document.getElementById("delta-badge");
+  var abs = Math.abs(delta);
+  badge.className = "delta-badge" + (abs > 2000 ? "" : " ok");
+  badge.innerHTML = icon(abs > 2000 ? "warning" : "check_circle") + '<span id="delta-text">' + formatDelta(delta) + "</span>";
+
+  if (manualVisible) {
+    document.getElementById("manual-date").value = formatLocalDate(rtc);
+    document.getElementById("manual-time").value = formatLocalTime(rtc);
+  }
+}
+
+function openManualForm() {
+  manualVisible = !manualVisible;
+  var form = document.getElementById("manual-form");
+  var button = document.getElementById("btn-manual-toggle");
+  form.classList.toggle("visible", manualVisible);
+  button.setAttribute("aria-expanded", manualVisible ? "true" : "false");
+  if (manualVisible) {
+    var base = rtcOk ? rtcNow() : new Date();
+    document.getElementById("manual-date").value = formatLocalDate(base);
+    document.getElementById("manual-time").value = formatLocalTime(base);
+    setTimeout(function () { form.scrollIntoView({ block: "center" }); }, 30);
+  }
+}
+
+function applyRtcTime(date) {
+  rtcBaseMs = date.getTime();
+  pageLoadedAt = Date.now();
+  updateClocks();
+}
+
+document.getElementById("btn-sync").addEventListener("click", function () {
+  if (!rtcOk) return;
+  var button = this;
+  var iconEl = button.querySelector(".icon");
+  button.disabled = true;
+  if (iconEl) iconEl.classList.add("spin");
+  setTimeout(function () {
+    if (simulateFail) {
+      showToast("Falha simulada ao sincronizar o RTC.", false, "ERRO");
+    } else {
+      applyRtcTime(new Date());
+      showToast("RTC DS3231 sincronizado com sucesso!", true, "ACK");
+    }
+    button.disabled = false;
+    if (iconEl) iconEl.classList.remove("spin");
+  }, 700);
+});
+
+document.getElementById("btn-manual-toggle").addEventListener("click", openManualForm);
+
+document.getElementById("btn-manual-save").addEventListener("click", function () {
+  if (!rtcOk) return;
+  var dateValue = document.getElementById("manual-date").value;
+  var timeValue = document.getElementById("manual-time").value;
+  if (!dateValue || !timeValue) {
+    showToast("Informe data e horário para gravar.", false, "ERRO");
+    return;
+  }
+  var target = new Date(dateValue + "T" + timeValue);
+  if (isNaN(target.getTime())) {
+    showToast("Data ou horário inválido.", false, "ERRO");
+    return;
+  }
+  if (simulateFail) {
+    showToast("Falha simulada ao gravar o timestamp.", false, "ERRO");
+    return;
+  }
+  applyRtcTime(target);
+  showToast("Timestamp manual gravado no DS3231.", true, "ACK");
+});
+
+(function init() {
+  setStatus();
+  document.getElementById("rtc-temp").textContent = rtcOk
+    ? (params.has("temp") ? Number(params.get("temp")).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : "31,2") + " °C"
+    : "—";
+  document.getElementById("rtc-backup").textContent = rtcOk ? (lostPower ? "PERDEU ENERGIA" : "OK") : "—";
+  document.getElementById("rtc-backup").className = lostPower ? "bad" : "";
+  updateClocks();
+  if (params.get("manual") === "1") openManualForm();
+  setInterval(updateClocks, 1000);
+})();
+</script>
+</body>
+</html>

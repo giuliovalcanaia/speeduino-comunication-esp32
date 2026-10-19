@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#faf8ff">
+<title>SD - Speeduino Log Server</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="app-header">
+  <div class="header-inner">
+    <div class="brand-row">
+      <div class="brand">
+        <div class="brand-mark"><span data-icon="memory"></span></div>
+        <div>
+          <div class="brand-title"><strong>Speeduino</strong><span class="brand-kicker">Log Server</span></div>
+          <span class="brand-sub">ESP32 // ARMAZENAMENTO</span>
+        </div>
+      </div>
+    </div>
+    <div class="status-row">
+      <div class="status-group">
+        <span class="status-chip"><span class="dot"></span>AP: 192.168.4.1</span>
+      </div>
+      <div class="status-group">
+        <span class="status-chip"><span class="dot" id="rtc-dot"></span><span id="rtc-status">RTC SYNC</span></span>
+        <span class="status-chip"><span class="dot" id="sd-dot"></span><span id="sd-status">SD MOUNT</span></span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main class="page">
+  <div class="hardware-bar">
+    <div class="crumb-static"><strong>HARDWARE</strong><span class="sep">/</span><span>CARTÃO SD</span></div>
+    <div class="hardware-actions">
+      <span class="status-badge" id="op-status"><span class="dot"></span><span id="op-text">OPERACIONAL</span></span>
+      <button class="icon-btn" id="refresh-btn" type="button" aria-label="Atualizar dados"><span data-icon="sync"></span></button>
+    </div>
+  </div>
+
+  <section class="card">
+    <div class="card-head">
+      <div class="card-identity">
+        <div class="card-icon"><span data-icon="sd_card"></span></div>
+        <div>
+          <h2 class="card-title">Cartão SD</h2>
+          <p class="card-sub" id="card-sub">SDHC // FAT montado</p>
+        </div>
+      </div>
+      <span class="status-badge" id="fs-badge"><span class="dot"></span><span id="fs-badge-text">FS PRONTO</span></span>
+    </div>
+
+    <div class="storage-box">
+      <div class="storage-numbers">
+        <div class="storage-number">
+          <span class="storage-label">Espaço Ocupado</span>
+          <div class="storage-value"><strong id="used-value">14,2</strong><span>GB</span><em id="used-pct">(44,4%)</em></div>
+        </div>
+        <div class="storage-number right">
+          <span class="storage-label">Livre Disponível</span>
+          <div class="storage-value"><strong id="free-value">17,8</strong><span>GB</span></div>
+        </div>
+      </div>
+      <div class="progress">
+        <div class="progress-used" id="used-bar" style="width: 44.4%"></div>
+        <div class="progress-buffer" id="buffer-bar" style="width: 0.3%"></div>
+      </div>
+      <div class="storage-foot"><span id="storage-foot-left">0 GB</span><strong id="capacity-label">CAPACIDADE: 32,0 GB</strong></div>
+    </div>
+
+    <div class="spec-grid">
+      <div class="spec"><span class="spec-label">Sistema</span><span class="spec-value" id="spec-system">FAT</span></div>
+      <div class="spec"><span class="spec-label">Interface</span><span class="spec-value" id="spec-interface">SPI @ 10 MHz</span></div>
+      <div class="spec"><span class="spec-label">Setor</span><span class="spec-value" id="spec-sector">512 B</span></div>
+    </div>
+  </section>
+
+  <section class="two-col">
+    <div class="stat-card">
+      <div class="stat-title"><span data-icon="description"></span> Log atual</div>
+      <div>
+        <div class="stat-value small" id="current-log">2025-10-19T12-34-56.csv</div>
+        <p class="stat-sub" id="current-sub">Gravação armada no cartão</p>
+      </div>
+      <div class="stat-foot"><span data-icon="clock"></span><span id="current-foot">Pasta /2025/Outubro/19</span></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-title"><span data-icon="database"></span> Sessões .csv</div>
+      <div>
+        <div class="stat-value" id="session-count">34</div>
+        <p class="stat-sub" id="session-sub">Arquivos de log no cartão</p>
+      </div>
+      <div class="stat-foot"><span data-icon="check_circle"></span><span id="session-foot">Inclui /NO_RTC</span></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <div class="card-identity">
+        <div class="card-icon"><span data-icon="gauge"></span></div>
+        <div>
+          <h2 class="card-title">Diagnóstico</h2>
+          <p class="card-sub">Estado somente leitura do armazenamento</p>
+        </div>
+      </div>
+    </div>
+    <div class="diag-list">
+      <div class="diag-row"><span>Cartão montado</span><strong class="ok" id="diag-sd">Sim</strong></div>
+      <div class="diag-row"><span>RTC disponível</span><strong class="ok" id="diag-rtc">Sim</strong></div>
+      <div class="diag-row"><span>Gravação</span><strong class="ok" id="diag-arm">Armada</strong></div>
+      <div class="diag-row"><span>Margem livre de segurança</span><strong id="diag-margin">100 MB</strong></div>
+    </div>
+    <div class="note-box">
+      <strong>Somente leitura.</strong> Formatar, desmontar e verificar integridade não estão disponíveis nesta versão. Os logs podem ser baixados ou excluídos individualmente na aba Logs.
+    </div>
+  </section>
+</main>
+
+<nav class="bottom-nav">
+  <div class="nav-inner">
+    <a class="nav-item" href="index.html"><span data-icon="folder_data"></span><span>Logs</span></a>
+    <a class="nav-item active" href="sd.html" aria-current="page"><span data-icon="sd_card"></span><span>SD</span></a>
+    <a class="nav-item" href="rtc.html"><span data-icon="update"></span><span>RTC</span></a>
+  </div>
+</nav>
+
+<script src="common.js"></script>
+<script>
+var params = new URLSearchParams(location.search);
+var sdOk = params.get("sd") !== "0";
+var rtcOk = params.get("rtc") !== "0";
+var totalBytes = 32 * 1024 * 1024 * 1024;
+var usedBytes = Math.round(totalBytes * 0.444);
+var marginBytes = 100 * 1024 * 1024;
+var currentLog = "2025-10-19T12-34-56.csv";
+var currentFolder = "/2025/Outubro/19";
+
+function storageParts(bytes) {
+  if (bytes < 1024 * 1024 * 1024) {
+    return { value: (bytes / (1024 * 1024)).toLocaleString("pt-BR", { maximumFractionDigits: 1 }), unit: "MB" };
+  }
+  return { value: (bytes / (1024 * 1024 * 1024)).toLocaleString("pt-BR", { maximumFractionDigits: 1 }), unit: "GB" };
+}
+
+function setStatus() {
+  var rtcDot = document.getElementById("rtc-dot");
+  var rtcText = document.getElementById("rtc-status");
+  var sdDot = document.getElementById("sd-dot");
+  var sdText = document.getElementById("sd-status");
+  rtcDot.className = "dot" + (rtcOk ? "" : " err");
+  rtcText.textContent = rtcOk ? "RTC SYNC" : "RTC OFF";
+  sdDot.className = "dot" + (sdOk ? "" : " err");
+  sdText.textContent = sdOk ? "SD MOUNT" : "SD OFF";
+}
+
+function render() {
+  setStatus();
+
+  var used = sdOk ? usedBytes : 0;
+  var total = sdOk ? totalBytes : 0;
+  var free = Math.max(0, total - used);
+  var usedPct = total ? (used / total) * 100 : 0;
+  var bufferPct = total ? (marginBytes / total) * 100 : 0;
+  var usedParts = storageParts(used);
+  var freeParts = storageParts(free);
+  var totalParts = storageParts(total);
+
+  var op = document.getElementById("op-status");
+  var opText = document.getElementById("op-text");
+  var fsBadge = document.getElementById("fs-badge");
+  var fsText = document.getElementById("fs-badge-text");
+  var cardSub = document.getElementById("card-sub");
+
+  op.className = "status-badge" + (sdOk ? "" : " error");
+  opText.textContent = sdOk ? "OPERACIONAL" : "FALHA";
+  fsBadge.className = "status-badge" + (sdOk ? "" : " error");
+  fsText.textContent = sdOk ? "FS PRONTO" : "SEM FS";
+  cardSub.textContent = sdOk ? "SDHC // FAT montado" : "Cartão não montado";
+
+  document.getElementById("used-value").textContent = sdOk ? usedParts.value : "—";
+  document.getElementById("free-value").textContent = sdOk ? freeParts.value : "—";
+  document.querySelector("#used-value + span").textContent = sdOk ? usedParts.unit : "";
+  document.querySelector("#free-value + span").textContent = sdOk ? freeParts.unit : "";
+  document.getElementById("used-pct").textContent = sdOk ? "(" + usedPct.toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + "%)" : "";
+  document.getElementById("used-bar").style.width = sdOk ? usedPct + "%" : "0%";
+  document.getElementById("buffer-bar").style.width = sdOk ? bufferPct + "%" : "0%";
+  document.getElementById("buffer-bar").style.display = sdOk ? "" : "none";
+  document.getElementById("storage-foot-left").textContent = sdOk ? "0 GB" : "—";
+  document.getElementById("capacity-label").textContent = sdOk ? "CAPACIDADE: " + totalParts.value + " " + totalParts.unit : "CAPACIDADE: —";
+
+  document.getElementById("spec-system").textContent = sdOk ? "FAT" : "—";
+  document.getElementById("spec-interface").textContent = sdOk ? "SPI @ 10 MHz" : "—";
+  document.getElementById("spec-sector").textContent = sdOk ? "512 B" : "—";
+
+  document.getElementById("current-log").innerHTML = sdOk ? escapeHtml(currentLog).replace("T", "<br>") : "—";
+  document.getElementById("current-sub").textContent = sdOk ? "Gravação armada no cartão" : "Sem acesso ao cartão";
+  document.getElementById("current-foot").textContent = sdOk ? "Pasta " + currentFolder : "Pasta indisponível";
+  document.getElementById("session-count").textContent = sdOk ? "34" : "0";
+  document.getElementById("session-sub").textContent = sdOk ? "Arquivos de log no cartão" : "Nenhum arquivo acessível";
+  document.getElementById("session-foot").textContent = sdOk ? "Inclui /NO_RTC" : "SD indisponível";
+
+  document.getElementById("diag-sd").textContent = sdOk ? "Sim" : "Não";
+  document.getElementById("diag-sd").className = sdOk ? "ok" : "bad";
+  document.getElementById("diag-rtc").textContent = rtcOk ? "Sim" : "Não";
+  document.getElementById("diag-rtc").className = rtcOk ? "ok" : "bad";
+  document.getElementById("diag-arm").textContent = sdOk ? "Armada" : "Parada";
+  document.getElementById("diag-arm").className = sdOk ? "ok" : "bad";
+  document.getElementById("diag-margin").textContent = "100 MB";
+}
+
+document.getElementById("refresh-btn").addEventListener("click", function () {
+  var button = this;
+  button.classList.add("spin");
+  setTimeout(function () { button.classList.remove("spin"); }, 500);
+  render();
+});
+
+render();
+</script>
+</body>
+</html>
