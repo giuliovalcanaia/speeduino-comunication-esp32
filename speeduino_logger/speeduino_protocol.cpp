@@ -28,7 +28,7 @@ uint32_t crc32(const uint8_t* data, size_t len) {
 size_t buildFrame(uint8_t* out, size_t outCapacity,
                   const uint8_t* payload, size_t payloadLen) {
   if (out == nullptr || payload == nullptr || payloadLen == 0 ||
-      payloadLen > 0xFFFFu) {
+      payloadLen > MAX_PAYLOAD) {
     return 0;
   }
 
