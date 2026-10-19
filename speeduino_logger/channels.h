@@ -1,9 +1,9 @@
 #pragma once
 
 // Tabela de canais da Speeduino gravados no CSV.
-// Os offsets seguem a lista de dados em tempo real da wiki da Speeduino;
-// confirme as escalas (principalmente PW, TPS e AFR) com o speeduino.ini
-// da SUA versao de firmware e ajuste a tabela em channels.cpp.
+// Os offsets seguem o protocolo primario de 130 bytes (getTSLogEntry) do
+// firmware 202501.7. Se o firmware mudar, revise os offsets no speeduino.ini
+// (secao [OutputChannels]) e ajuste channels.cpp.
 
 #include <Arduino.h>
 
