@@ -9,17 +9,21 @@
 
     config.h          constantes e pinos (USE_WIFI fica aqui)
     transport.h/.cpp  Wi-Fi AP + TCP 2000  ou  Bluetooth SPP
-    ecu_bridge.h/.cpp Serial2, polling 'n' e ponte/sniffer
+    speeduino_protocol.h/.cpp framing [len][payload][CRC32]
+    ecu_bridge.h/.cpp Serial2, polling 'r' framed e ponte/sniffer
     frame_queue.h/.cpp fila FreeRTOS de frames brutos
     rtc_time.h/.cpp   DS3231 e formatacao ISO 8601
     log_store.h/.cpp  SD, rotacao, limpeza e escrita CSV
     web_ui.h/.cpp     servidor HTTP de logs (USE_WIFI = 1)
     led_status.h/.cpp padroes do LED onboard
 
+  Hardware: o ESP32 fica no conector HC-06 da Speeduino, ligado a Serial0
+  (D0/D1) do Mega. Nao use USB e ESP32 ao mesmo tempo.
+
   Modos:
-    - Cliente conectado (TunerStudio): ponte transparente ECU <-> cliente,
-      sniffer grava as respostas de tempo real no SD.
-    - Sem cliente: polling autonomo da ECU com comando 'n' a POLL_HZ Hz.
+    - Cliente TCP conectado (TunerStudio/ECU Manager): ponte transparente
+      ECU <-> cliente, sniffer passivo das respostas 'r' no SD.
+    - Sem cliente TCP: polling autonomo com 'r' 0x30 framed a POLL_HZ.
 
   Compilacao: placa "ESP32 Dev Module", Partition Scheme "Huge APP".
 */
