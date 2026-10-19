@@ -1,0 +1,33 @@
+# Arduino / PlatformIO build artifacts
+.pio/
+.pioenvs/
+.piolibdeps/
+.vscode/
+build/
+*.bin
+*.elf
+*.map
+*.hex
+*.d
+*.o
+*.a
+*.su
+
+# Arduino IDE
+*.tmp
+*.bak
+*.orig
+*.rej
+*.swp
+
+# Python
+__pycache__/
+*.pyc
+
+# OS/editor
+.DS_Store
+Thumbs.db
+
+# Local logs and temporary files
+*.log
+/tmp/
