@@ -315,7 +315,7 @@ arduino-cli compile \
 >
 > O logger grava cada resposta da ECU como uma linha de CSV diretamente no SD (`logFile.write()`) e faz `flush()` a cada 1 segundo (`FLUSH_MS = 1000`). O polling autônomo é configurado para 10 Hz, mas **cartões SD lentos ou com picos de latência podem reduzir a frequência efetiva**.
 >
-> Isso não é um problema de throughput (o volume de dados é pequeno, ~12 KB/s), mas de **latência imprevisível** das operações `write()` e, principalmente, `flush()`.
+> Isso não é um problema de throughput (o volume de dados é pequeno, ~4 KB/s a 10 Hz), mas de **latência imprevisível** das operações `write()` e, principalmente, `flush()`.
 >
 > **Ideias futuras para mitigar:**
 > - Medir no hardware real o tempo gasto em `logFrame()` e `flush()`.
